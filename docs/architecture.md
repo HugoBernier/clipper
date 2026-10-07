@@ -62,12 +62,13 @@ src/
 ## 4. Types
 
 ```rust
-struct Packet { ts: i64 /*100 ns QPC*/, dur: i64, keyframe: bool, data: Arc<[u8]> }
-struct Ring   { video: VecDeque<Packet>, audio: VecDeque<Packet>, keep: i64 }
-struct Clip   { video: Vec<Packet>, audio: Vec<Packet>, video_hdr: Arc<[u8]>, audio_hdr: Arc<[u8]> }
+struct Packet { ts: i64 /*100 ns QPC*/, key: bool, data: Arc<[u8]> }
+struct Ring   { packets: VecDeque<Packet>, keep: i64 }  // vidéo ; l'audio arrive à l'itération 2
+struct VideoFormat { width, height, fps, bitrate }       // mf.rs, commun encodeur et MP4
 ```
 
-- `Ring::snapshot(now, dur)` prend la dernière keyframe dont `ts ≤ now − dur`, puis l'audio à partir de ce `ts`.
+- Pas de `dur` par paquet (CFR : `1/fps`) ni d'en-tête stocké : SPS/PPS sont répétés dans chaque IDR (AMF : AUD, SPS, PPS, IDR) et `save` les extrait de la première keyframe.
+- `Ring::snapshot(end, dur)` prend la dernière keyframe dont `ts ≤ end − dur`, puis l'audio à partir de ce `ts`.
 - L'éviction garde `dur + 1 GOP` en mémoire.
 - **Cadence fixe (CFR) 60 fps**, comme OBS : WGC ne livre une image que si l'écran change, donc une horloge prend la dernière image convertie toutes les 1/60 s et la répète si rien de neuf n'est arrivé. `ts = t0 + n/60`. Le GOP de 60 donne alors exactement une keyframe par seconde. Vérifié au spike A.
 - **Sauvegarde** : comme OBS, on note l'instant de l'appui et on attend que l'encodeur ait sorti un paquet de `ts ≥` cet instant avant le snapshot, à cause de la latence de l'encodeur.

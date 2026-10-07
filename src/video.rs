@@ -1,0 +1,509 @@
+//! Vidéo : WGC (écran principal) → VideoProcessor (BGRA → NV12 BT.709, GPU)
+//! → horloge CFR → MFT H.264 matériel (async) → `Ring`.
+
+use std::mem::ManuallyDrop;
+use std::sync::mpsc::{Sender, channel};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result, anyhow, bail};
+use log::{error, info, warn};
+use windows::Foundation::TypedEventHandler;
+use windows::Graphics::Capture::{
+    Direct3D11CaptureFramePool, GraphicsCaptureItem, GraphicsCaptureSession,
+};
+use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
+use windows::Graphics::DirectX::DirectXPixelFormat;
+use windows::Win32::Foundation::{E_FAIL, E_POINTER, HMODULE, LPARAM, POINT, WPARAM};
+use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+use windows::Win32::Graphics::Direct3D11::*;
+use windows::Win32::Graphics::Dxgi::Common::*;
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
+use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::WinRT::Direct3D11::{
+    CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
+};
+use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
+use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+use windows::core::{IInspectable, Interface, Ref};
+
+use crate::mf::{self, SEC, VideoFormat};
+use crate::ring::{Packet, Ring};
+
+/// Les objets COM de windows-rs ne sont pas `Send` ; le device est
+/// multithread-protected et chaque objet n'est utilisé que sous un Mutex.
+struct SendBox<T>(T);
+unsafe impl<T> Send for SendBox<T> {}
+
+/// Dernière image convertie, partagée entre la capture et l'horloge d'encodage.
+type Latest = Arc<Mutex<SendBox<Option<ID3D11Texture2D>>>>;
+
+/// Démarre la capture et l'encodage dans un thread dédié. Renvoie le format une fois
+/// l'initialisation réussie. Si l'encodage échoue plus tard, le thread `main_thread`
+/// reçoit WM_QUIT.
+pub fn spawn(
+    height: u32,
+    fps: u32,
+    bitrate: u32,
+    ring: Arc<Mutex<Ring>>,
+    main_thread: u32,
+) -> Result<VideoFormat> {
+    let (ready_tx, ready_rx) = channel();
+    std::thread::Builder::new()
+        .name("video".into())
+        .spawn(move || {
+            if let Err(e) = run(height, fps, bitrate, &ring, &ready_tx) {
+                error!("vidéo arrêtée : {e:#}");
+                let _ = ready_tx.send(Err(anyhow!("{e:#}")));
+                // SAFETY: simple envoi de message au thread principal.
+                unsafe {
+                    let _ = PostThreadMessageW(main_thread, WM_QUIT, WPARAM(1), LPARAM(0));
+                }
+            }
+        })?;
+    ready_rx
+        .recv()
+        .context("thread vidéo mort pendant l'init")?
+}
+
+fn run(
+    height: u32,
+    fps: u32,
+    bitrate: u32,
+    ring: &Mutex<Ring>,
+    ready: &Sender<Result<VideoFormat>>,
+) -> Result<()> {
+    mf::startup()?;
+    let (device, context) = create_device()?;
+    let item = primary_monitor()?;
+    let src = item.Size()?;
+    // Hauteur fixe, largeur au ratio de l'écran (3440x1440 → 1720x720), paire pour NV12.
+    let width = (src.Width as u32 * height / src.Height as u32) & !1;
+    let format = VideoFormat {
+        width,
+        height,
+        fps,
+        bitrate,
+    };
+    let (encoder, name) = create_encoder(&device, &format)?;
+    info!(
+        "source {}x{} → {width}x{height} @ {fps} fps, {} kb/s, encodeur {name}",
+        src.Width,
+        src.Height,
+        bitrate / 1000
+    );
+
+    let latest: Latest = Arc::new(Mutex::new(SendBox(None)));
+    let _capture = start_capture(&device, &context, &item, &format, latest.clone())?;
+    let _ = ready.send(Ok(format));
+    encode_loop(&encoder, &format, &latest, ring)
+}
+
+fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+    let mut device = None;
+    let mut context = None;
+    // SAFETY: appels D3D11 standards, pointeurs de sortie valides.
+    unsafe {
+        D3D11CreateDevice(
+            None,
+            D3D_DRIVER_TYPE_HARDWARE,
+            HMODULE::default(),
+            // VIDEO_SUPPORT : requis par le VideoProcessor et l'encodeur MF.
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+            None,
+            D3D11_SDK_VERSION,
+            Some(&mut device),
+            None,
+            Some(&mut context),
+        )
+        .context("D3D11CreateDevice")?;
+        let device: ID3D11Device = device.context("device nul")?;
+        // L'encodeur MF utilise le device depuis ses propres threads.
+        let _previous = device
+            .cast::<ID3D11Multithread>()?
+            .SetMultithreadProtected(true);
+        Ok((device, context.context("context nul")?))
+    }
+}
+
+fn create_encoder(device: &ID3D11Device, format: &VideoFormat) -> Result<(IMFTransform, String)> {
+    // SAFETY: API MF documentée ; le tableau d'IMFActivate est libéré par CoTaskMemFree.
+    unsafe {
+        let input = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_NV12,
+        };
+        let output = MFT_REGISTER_TYPE_INFO {
+            guidMajorType: MFMediaType_Video,
+            guidSubtype: MFVideoFormat_H264,
+        };
+        let mut list = std::ptr::null_mut();
+        let mut count = 0;
+        MFTEnumEx(
+            MFT_CATEGORY_VIDEO_ENCODER,
+            MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+            Some(&input),
+            Some(&output),
+            &mut list,
+            &mut count,
+        )
+        .context("MFTEnumEx")?;
+        if count == 0 {
+            bail!("aucun encodeur H.264 matériel");
+        }
+        let activates = std::slice::from_raw_parts_mut(list, count as usize);
+        let activate = activates[0].take().context("IMFActivate nul")?;
+        for a in activates.iter_mut() {
+            a.take();
+        }
+        CoTaskMemFree(Some(list as _));
+
+        let mut name = windows::core::PWSTR::null();
+        let mut len = 0;
+        activate.GetAllocatedString(&MFT_FRIENDLY_NAME_Attribute, &mut name, &mut len)?;
+        let friendly = name.to_string()?;
+        CoTaskMemFree(Some(name.0 as _));
+
+        let mft: IMFTransform = activate.ActivateObject().context("ActivateObject")?;
+        mft.GetAttributes()?
+            .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
+
+        let mut token = 0;
+        let mut manager = None;
+        MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
+        let manager = manager.context("device manager nul")?;
+        manager.ResetDevice(device, token)?;
+        mft.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize)
+            .context("SET_D3D_MANAGER")?;
+
+        // Réglages alignés sur OBS (AMF) : CBR, keyframe toutes les 1 s, pas de
+        // B-frames (pts = dts), preset qualité, VBV d'1 s pour borner les dépassements.
+        // Le mode de débit se règle avant les types.
+        let codec: ICodecAPI = mft.cast()?;
+        let settings = [
+            (
+                "RateControlMode",
+                CODECAPI_AVEncCommonRateControlMode,
+                eAVEncCommonRateControlMode_CBR.0 as u32,
+            ),
+            ("GOPSize", CODECAPI_AVEncMPVGOPSize, format.fps),
+            ("BFrames", CODECAPI_AVEncMPVDefaultBPictureCount, 0),
+            ("QualityVsSpeed", CODECAPI_AVEncCommonQualityVsSpeed, 100),
+            ("BufferSize", CODECAPI_AVEncCommonBufferSize, format.bitrate),
+            ("MaxBitRate", CODECAPI_AVEncCommonMaxBitRate, format.bitrate),
+        ];
+        for (name, api, value) in settings {
+            if let Err(e) = codec.SetValue(&api, &mf::var_u32(value)) {
+                warn!("réglage encodeur {name} refusé : {e}");
+            }
+        }
+
+        mft.SetOutputType(0, &format.h264_type()?, 0)
+            .context("SetOutputType")?;
+        mft.SetInputType(0, &format.nv12_type()?, 0)
+            .context("SetInputType")?;
+        mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+        mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+        Ok((mft, friendly))
+    }
+}
+
+/// Garde la session WGC en vie ; la fermer arrête la capture.
+struct Capture {
+    pool: Direct3D11CaptureFramePool,
+    session: GraphicsCaptureSession,
+}
+
+impl Drop for Capture {
+    fn drop(&mut self) {
+        let _ = self.session.Close();
+        let _ = self.pool.Close();
+    }
+}
+
+fn primary_monitor() -> Result<GraphicsCaptureItem> {
+    // SAFETY: interop WinRT documentée.
+    unsafe {
+        let interop = windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()?;
+        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        interop
+            .CreateForMonitor(monitor)
+            .context("CreateForMonitor")
+    }
+}
+
+/// WGC n'envoie une image que quand l'écran change : chaque image reçue est convertie
+/// puis déposée dans `latest`, que l'horloge d'encodage reprend à fréquence fixe.
+fn start_capture(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    item: &GraphicsCaptureItem,
+    format: &VideoFormat,
+    latest: Latest,
+) -> Result<Capture> {
+    // SAFETY: interop WinRT/D3D11 documentée.
+    unsafe {
+        let size = item.Size()?;
+        let winrt_device: IDirect3DDevice =
+            CreateDirect3D11DeviceFromDXGIDevice(&device.cast::<IDXGIDevice>()?)?.cast()?;
+        let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
+            &winrt_device,
+            DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            2,
+            size,
+        )?;
+        let session = pool.CreateCaptureSession(item)?;
+        if let Err(e) = session.SetIsBorderRequired(false) {
+            warn!("bordure jaune de capture non désactivable : {e}");
+        }
+
+        let converter = SendBox(Converter::new(
+            device,
+            context,
+            size.Width as u32,
+            size.Height as u32,
+            format,
+        )?);
+        pool.FrameArrived(&TypedEventHandler::new(
+            move |pool: Ref<Direct3D11CaptureFramePool>, _: Ref<IInspectable>| {
+                let frame = pool.ok()?.TryGetNextFrame()?;
+                let access: IDirect3DDxgiInterfaceAccess = frame.Surface()?.cast()?;
+                let texture: ID3D11Texture2D = access.GetInterface()?;
+                let nv12 = converter.0.convert(&texture)?;
+                frame.Close()?;
+                latest
+                    .lock()
+                    .map_err(|_| windows::core::Error::from_hresult(E_FAIL))?
+                    .0 = Some(nv12);
+                Ok(())
+            },
+        ))?;
+        session.StartCapture()?;
+        Ok(Capture { pool, session })
+    }
+}
+
+/// BGRA (taille écran) → NV12 BT.709 plage limitée, à la taille de sortie, sur le GPU.
+struct Converter {
+    device: ID3D11Device,
+    video_device: ID3D11VideoDevice,
+    video_context: ID3D11VideoContext,
+    enumerator: ID3D11VideoProcessorEnumerator,
+    processor: ID3D11VideoProcessor,
+    width: u32,
+    height: u32,
+}
+
+impl Converter {
+    unsafe fn new(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        src_w: u32,
+        src_h: u32,
+        format: &VideoFormat,
+    ) -> Result<Self> {
+        unsafe {
+            let video_device: ID3D11VideoDevice = device.cast()?;
+            let video_context: ID3D11VideoContext = context.cast()?;
+            let rate = DXGI_RATIONAL {
+                Numerator: format.fps,
+                Denominator: 1,
+            };
+            let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+                InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+                InputFrameRate: rate,
+                InputWidth: src_w,
+                InputHeight: src_h,
+                OutputFrameRate: rate,
+                OutputWidth: format.width,
+                OutputHeight: format.height,
+                Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+            };
+            let enumerator = video_device.CreateVideoProcessorEnumerator(&desc)?;
+            let processor = video_device.CreateVideoProcessor(&enumerator, 0)?;
+            // Sans ça, le VideoProcessor sort du BT.601 (valeur par défaut).
+            let ctx1: ID3D11VideoContext1 = video_context.cast()?;
+            ctx1.VideoProcessorSetStreamColorSpace1(
+                &processor,
+                0,
+                DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+            );
+            ctx1.VideoProcessorSetOutputColorSpace1(
+                &processor,
+                DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
+            );
+            Ok(Self {
+                device: device.clone(),
+                video_device,
+                video_context,
+                enumerator,
+                processor,
+                width: format.width,
+                height: format.height,
+            })
+        }
+    }
+
+    unsafe fn convert(&self, src: &ID3D11Texture2D) -> windows::core::Result<ID3D11Texture2D> {
+        unsafe {
+            // Une texture neuve par image : l'encodeur async peut encore lire la précédente.
+            let desc = D3D11_TEXTURE2D_DESC {
+                Width: self.width,
+                Height: self.height,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_NV12,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    Quality: 0,
+                },
+                Usage: D3D11_USAGE_DEFAULT,
+                BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+                ..Default::default()
+            };
+            let mut nv12 = None;
+            self.device.CreateTexture2D(&desc, None, Some(&mut nv12))?;
+            let nv12 = nv12.ok_or_else(|| windows::core::Error::from_hresult(E_POINTER))?;
+
+            let out_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+                ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
+                },
+            };
+            let mut out_view = None;
+            self.video_device.CreateVideoProcessorOutputView(
+                &nv12,
+                &self.enumerator,
+                &out_desc,
+                Some(&mut out_view),
+            )?;
+
+            let in_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+                FourCC: 0,
+                ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
+                    Texture2D: D3D11_TEX2D_VPIV {
+                        MipSlice: 0,
+                        ArraySlice: 0,
+                    },
+                },
+            };
+            let mut in_view = None;
+            self.video_device.CreateVideoProcessorInputView(
+                src,
+                &self.enumerator,
+                &in_desc,
+                Some(&mut in_view),
+            )?;
+
+            let mut stream = D3D11_VIDEO_PROCESSOR_STREAM {
+                Enable: true.into(),
+                pInputSurface: ManuallyDrop::new(in_view),
+                ..Default::default()
+            };
+            let result = self.video_context.VideoProcessorBlt(
+                &self.processor,
+                out_view
+                    .as_ref()
+                    .ok_or_else(|| windows::core::Error::from_hresult(E_POINTER))?,
+                0,
+                std::slice::from_ref(&stream),
+            );
+            ManuallyDrop::drop(&mut stream.pInputSurface);
+            result?;
+            Ok(nv12)
+        }
+    }
+}
+
+/// Horloge à fréquence fixe (comme OBS) : l'image n part à start + n/fps avec
+/// ts = t0 + n/fps ; si WGC n'a rien envoyé de neuf, la dernière image est répétée.
+fn encode_loop(
+    mft: &IMFTransform,
+    format: &VideoFormat,
+    latest: &Latest,
+    ring: &Mutex<Ring>,
+) -> Result<()> {
+    let fps = i64::from(format.fps);
+    let start = Instant::now();
+    let t0 = mf::now();
+    let mut n: i64 = 0;
+    // SAFETY: modèle async MF : on ne nourrit/vide l'encodeur qu'en réponse à ses événements.
+    unsafe {
+        let events: IMFMediaEventGenerator = mft.cast()?;
+        loop {
+            let event = events.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
+            let kind = event.GetType()?;
+            if kind == METransformNeedInput.0 as u32 {
+                let due = start + Duration::from_nanos((n * 1_000_000_000 / fps) as u64);
+                std::thread::sleep(due.saturating_duration_since(Instant::now()));
+                let texture = wait_first_frame(latest)?;
+                let buffer = MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &texture, 0, false)?;
+                let sample = MFCreateSample()?;
+                sample.AddBuffer(&buffer)?;
+                sample.SetSampleTime(t0 + n * SEC / fps)?;
+                sample.SetSampleDuration(format.frame_duration())?;
+                mft.ProcessInput(0, &sample, 0).context("ProcessInput")?;
+                n += 1;
+            } else if kind == METransformHaveOutput.0 as u32 {
+                let Some(sample) = process_output(mft)? else {
+                    continue;
+                };
+                let buffer = sample.ConvertToContiguousBuffer()?;
+                let mut ptr = std::ptr::null_mut();
+                let mut len = 0;
+                buffer.Lock(&mut ptr, None, Some(&mut len))?;
+                let data: Arc<[u8]> = Arc::from(std::slice::from_raw_parts(ptr, len as usize));
+                buffer.Unlock()?;
+                let packet = Packet {
+                    ts: sample.GetSampleTime()?,
+                    key: has_idr(&data),
+                    data,
+                };
+                ring.lock()
+                    .map_err(|_| anyhow!("ring empoisonné"))?
+                    .push(packet);
+            }
+        }
+    }
+}
+
+fn wait_first_frame(latest: &Latest) -> Result<ID3D11Texture2D> {
+    loop {
+        let guard = latest.lock().map_err(|_| anyhow!("mutex empoisonné"))?;
+        if let Some(t) = guard.0.clone() {
+            return Ok(t);
+        }
+        drop(guard);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+unsafe fn process_output(mft: &IMFTransform) -> Result<Option<IMFSample>> {
+    unsafe {
+        let mut buffers = [MFT_OUTPUT_DATA_BUFFER::default()];
+        let mut status = 0;
+        match mft.ProcessOutput(0, &mut buffers, &mut status) {
+            Ok(()) => {}
+            Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                let t = mft.GetOutputAvailableType(0, 0)?;
+                mft.SetOutputType(0, &t, 0)?;
+                warn!("type de sortie de l'encodeur renégocié");
+                return Ok(None);
+            }
+            Err(e) => return Err(e).context("ProcessOutput"),
+        }
+        let [buffer] = &mut buffers;
+        ManuallyDrop::drop(&mut buffer.pEvents);
+        Ok(ManuallyDrop::take(&mut buffer.pSample))
+    }
+}
+
+/// Cherche une NAL IDR (type 5) dans une unité d'accès Annex B.
+fn has_idr(data: &[u8]) -> bool {
+    data.windows(4)
+        .any(|w| w[..3] == [0, 0, 1] && w[3] & 0x1f == 5)
+}
