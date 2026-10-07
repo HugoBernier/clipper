@@ -39,6 +39,8 @@ const BITRATE: u32 = 4_500_000;
 const SECONDS: u32 = 10;
 const SEC: i64 = 10_000_000; // 100 ns
 const OUT: &str = "target/spike_a.h264";
+/// Une ligne par paquet : `ts len keyframe`, lue par le spike B.
+const INDEX: &str = "target/spike_a.idx";
 
 /// Les objets COM de windows-rs ne sont pas `Send` ; ici le device est
 /// multithread-protected et chaque objet n'est utilisé que sous un Mutex.
@@ -457,6 +459,7 @@ struct Stats {
 /// ts = n/FPS ; si WGC n'a rien envoyé de neuf, la dernière image est répétée.
 fn encode_loop(mft: &IMFTransform, latest: &Latest) -> Result<Stats> {
     let mut file = File::create(OUT)?;
+    let mut index = File::create(INDEX)?;
     let mut stats = Stats::default();
     let mut draining = false;
     let mut n: u32 = 0;
@@ -501,11 +504,14 @@ fn encode_loop(mft: &IMFTransform, latest: &Latest) -> Result<Stats> {
                 let mut len = 0;
                 buffer.Lock(&mut ptr, None, Some(&mut len))?;
                 let data = std::slice::from_raw_parts(ptr, len as usize);
-                if has_idr(data) {
-                    stats.keyframes.push(
-                        (sample.GetSampleTime()? as f64 / SEC as f64 * 100.0).round() / 100.0,
-                    );
+                let ts = sample.GetSampleTime()?;
+                let key = has_idr(data);
+                if key {
+                    stats
+                        .keyframes
+                        .push((ts as f64 / SEC as f64 * 100.0).round() / 100.0);
                 }
+                writeln!(index, "{ts} {} {}", data.len(), key as u8)?;
                 file.write_all(data)?;
                 stats.bytes += data.len();
                 buffer.Unlock()?;
