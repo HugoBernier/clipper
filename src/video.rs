@@ -465,7 +465,7 @@ fn encode_loop(
                 };
                 ring.lock()
                     .map_err(|_| anyhow!("ring empoisonné"))?
-                    .push(packet);
+                    .push_video(packet);
             }
         }
     }
