@@ -17,7 +17,7 @@ En cas de doute, le moins de code gagne.
 ## Règles de code
 
 - **Toolchain** : Rust stable, edition 2024, cible `x86_64-pc-windows-msvc`.
-- **Crates autorisées** : `windows`, `windows-capture`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog`. Toute autre crate se demande d'abord.
+- **Crates autorisées** : `windows`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog`. Toute autre crate se demande d'abord.
 - **Erreurs** : `anyhow::Result` partout, et `.context("…")` sur chaque appel COM ou Win32. Pas de `unwrap()` hors tests.
 - **`unsafe`** : seulement dans `mf.rs`, `video.rs`, `audio.rs`, `save.rs` et l'appel `RegisterHotKey`. Chaque bloc porte un commentaire `// SAFETY:`. `ring.rs` et `config.rs` ont `#![forbid(unsafe_code)]`.
 - **Pas de console en release** : `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`.

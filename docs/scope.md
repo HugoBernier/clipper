@@ -56,7 +56,7 @@ D'ici là, OBS reste l'outil du quotidien.
 
 | # | Étape | Fini quand |
 |---|---|---|
-| A | Spike : WGC → MFT H.264 AMF → `.h264` brut 10 s | Lisible dans VLC, CPU < 5 %, une keyframe par seconde |
+| A | Spike : WGC → MFT H.264 AMF → `.h264` brut 10 s | Lisible dans VLC, CPU < 5 %, une keyframe par seconde. **Fait le 2026-10-07** : `AMDh264Encoder`, 1720×720, CFR 60 fps (600 images en 10 s), keyframes à 0,0 / 1,0 … 9,0 s, 4,8 Mb/s pour une cible de 4,5 (+6-7 %), CPU 1,2 % sur le bureau. **Reste à faire** : lecture du fichier et CPU mesuré en jeu. |
 | B | Spike : paquets → MP4 via SinkWriter passthrough | Le MP4 se lit dans Discord (sinon, plan B : crate `mp4`) |
 | 1 | Ring + hotkey + config, vidéo seule | 1 h stable en mémoire, clip de 30 à 31 s sous la cible |
 | 2 | Audio + AAC + synchro QPC | Décalage < 1 frame, pas de dérive après un silence |
