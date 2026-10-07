@@ -16,7 +16,7 @@ Légende : **[V]** vérifié en ligne le 2026-10-07 · **[S]** supposé, à conf
 | `serde` + `toml` | toml 1.1.6 [V] | Config | Prendre |
 | `anyhow` | 1.0.104 [V] | Erreurs | Prendre |
 | `log` + `simplelog` | 0.12.2 [V] | Log dans un fichier | Prendre |
-| ~~`mp4`~~ | 0.14.0, figé depuis 2023 [V] | Muxer | Plan B seulement. Muxing via IMFSinkWriter en passthrough [S] |
+| ~~`mp4`~~ | 0.14.0, figé depuis 2023 [V] | Muxer | Inutile : le passthrough IMFSinkWriter fonctionne (spike B) |
 
 Encodage : MFT Media Foundation appelés directement (H.264 AMF matériel + AAC Microsoft).
 
@@ -32,7 +32,7 @@ src/
   mf.rs      # helpers MF partagés : MFStartup, media types, MFT async
   video.rs   # WGC → VideoProcessor (scale + NV12, GPU) → MFT H.264
   audio.rs   # loopback WASAPI → bouchage des silences, f32→i16 → MFT AAC
-  save.rs    # snapshot → SinkWriter passthrough → .tmp puis rename
+  save.rs    # snapshot → SinkWriter passthrough → .tmp → faststart (pur) → rename
 ```
 
 ## 3. Flux et threads
@@ -84,8 +84,15 @@ struct Clip   { video: Vec<Packet>, audio: Vec<Packet>, video_hdr: Arc<[u8]>, au
 | Débit | VBV = 1 s (`BufferSize` = `MaxBitRate` = débit) + **marge de 10 %** dans le calcul | Mesuré au spike A : CBR AMF à +6-7 % avec VBV, +13 % sans |
 | Couleurs | NV12 4:2:0, **BT.709 plage limitée**, réglé sur le VideoProcessor et étiqueté dans les types MF | Le VideoProcessor sort du BT.601 par défaut ([doc D3D11](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11videocontext-videoprocessorsetoutputcolorspace)) |
 | Mise à l'échelle | VideoProcessor du driver. 3440→1720 est un ratio ×2 exact, donc peu de risque d'artefacts. | À juger à l'œil au spike B |
-| MP4 | H.264 + AAC, `moov` avant `mdat` (« faststart ») via `MF_MPEG4SINK_MOOV_BEFORE_MDAT` | Recette web standard ([doc MF](https://learn.microsoft.com/en-us/windows/win32/medfound/mf-mpeg4sink-moov-before-mdat)) ; à vérifier : le SinkWriter transmet-il l'attribut ? |
+| MP4 | H.264 + AAC, `moov` avant `mdat` (« faststart ») par **réécriture façon `qt-faststart`** : on déplace `moov` et on décale les offsets `stco`/`co64` de sa taille. Fonction pure, testée en TDD dans `save.rs`. | Recette web standard. `MF_MPEG4SINK_MOOV_BEFORE_MDAT` est **écarté** : sa recopie décale le `mdat` d'1 Mio et rend le fichier illisible (spike B). |
 | Audio | Timestamps du périphérique (`GetBuffer` → position QPC), silence inséré quand la loopback ne livre rien | Équivalent du réglage « Use device timestamps » d'OBS |
+
+### Pièges Media Foundation rencontrés
+
+- SinkWriter vers un `.tmp` : préciser `MF_TRANSCODE_CONTAINERTYPE = MPEG4`, sinon le conteneur est déduit de l'extension (`MF_E_NOT_FOUND`).
+- Passthrough H.264 : même type en entrée et en sortie, avec `MF_MT_MPEG_SEQUENCE_HEADER` = SPS + PPS (start codes) extraits de la première keyframe. `MFSampleExtension_CleanPoint` sur les keyframes.
+- Les ts sont ramenés à 0 sur la keyframe de coupe.
+- Lecture en RGB32 : les lignes sont alignées, donc le pas réel est `taille / hauteur`, pas `largeur × 4`.
 
 ## 6. Bonnes pratiques
 
@@ -103,6 +110,8 @@ struct Clip   { video: Vec<Packet>, audio: Vec<Packet>, video_hdr: Arc<[u8]>, au
 
 **TDD (logique pure)** :
 - `ring` : éviction, aucune keyframe assez ancienne, buffer court, buffer vide, audio aligné sur la keyframe.
+- `faststart` : moov déjà devant (inchangé), moov après mdat (déplacé, offsets `stco` décalés), `co64`, boîte 64 bits, débordement 32 bits → erreur, fichier tronqué → erreur.
+- `sequence_header` : extrait SPS + PPS d'une unité d'accès (start codes sur 3 et 4 octets).
 - `video_bitrate(target_mb, dur, gop, audio_bps, marge = 0.10)` : cas normal, résultat négatif ou trop bas.
 - Parsing de la config, y compris le raccourci (`"Ctrl+Alt+F10"`).
 - Audio : f32→i16 avec saturation, nombre d'échantillons de silence à insérer.
