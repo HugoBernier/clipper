@@ -83,6 +83,34 @@ impl VideoFormat {
     }
 }
 
+/// Format AAC de l'encodeur, sérialisé (attributs MF) pour passer d'un thread à
+/// l'autre et recréer le même type dans le MP4.
+#[derive(Clone, Debug)]
+pub struct AudioFormat {
+    attributes: Vec<u8>,
+}
+
+impl AudioFormat {
+    pub fn from_media_type(media_type: &IMFMediaType) -> Result<Self> {
+        // SAFETY: sérialisation documentée ; le buffer a la taille annoncée par MF.
+        unsafe {
+            let size = MFGetAttributesAsBlobSize(media_type)?;
+            let mut attributes = vec![0; size as usize];
+            MFGetAttributesAsBlob(media_type, &mut attributes)?;
+            Ok(Self { attributes })
+        }
+    }
+
+    pub fn media_type(&self) -> Result<IMFMediaType> {
+        // SAFETY: désérialisation d'un blob produit par MFGetAttributesAsBlob.
+        unsafe {
+            let t = MFCreateMediaType()?;
+            MFInitAttributesFromBlob(&t, &self.attributes)?;
+            Ok(t)
+        }
+    }
+}
+
 /// VARIANT VT_UI4 pour `ICodecAPI::SetValue` (le VARIANT Win32 n'a pas de `From`).
 pub fn var_u32(v: u32) -> VARIANT {
     VARIANT {

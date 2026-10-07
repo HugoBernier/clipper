@@ -1,3 +1,4 @@
+mod audio;
 mod config;
 mod mf;
 mod ring;
@@ -18,16 +19,22 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
 use crate::config::{Config, parse_hotkey};
-use crate::mf::{SEC, VideoFormat};
+use crate::mf::{AudioFormat, SEC, VideoFormat};
 use crate::ring::Ring;
 
-/// Débit réservé dès maintenant à l'audio (itération 2), pour que la taille ne bouge pas.
+/// AAC 160 kb/s (débits possibles de l'encodeur Windows : 96, 128, 160, 192).
 const AUDIO_BPS: u32 = 160_000;
 /// Délai max pour que l'encodeur rattrape l'instant de l'appui.
 const CATCH_UP: Duration = Duration::from_secs(2);
 
 fn main() -> Result<()> {
-    simplelog::SimpleLogger::init(log::LevelFilter::Info, simplelog::Config::default())?;
+    // CLIPPER_DEBUG=1 : logs détaillés (diagnostic).
+    let level = if std::env::var_os("CLIPPER_DEBUG").is_some() {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+    simplelog::SimpleLogger::init(level, simplelog::Config::default())?;
     if let Err(e) = run() {
         error!("{e:#}");
         return Err(e);
@@ -48,13 +55,17 @@ fn run() -> Result<()> {
     let ring = Arc::new(Mutex::new(Ring::new(clip + SEC)));
     // SAFETY: GetCurrentThreadId n'a pas de précondition.
     let main_thread = unsafe { GetCurrentThreadId() };
-    let format = video::spawn(
+    let video = video::spawn(
         config.height,
         config.fps,
         bitrate,
         ring.clone(),
         main_thread,
     )?;
+    // Sans audio (aucune sortie son, encodeur absent), on garde au moins la vidéo.
+    let audio = audio::spawn(AUDIO_BPS, ring.clone())
+        .inspect_err(|e| warn!("clips sans son : {e:#}"))
+        .ok();
 
     // SAFETY: raccourci global lié au thread courant (hwnd nul) ; pas de hook clavier.
     unsafe {
@@ -86,9 +97,10 @@ fn run() -> Result<()> {
             warn!("sauvegarde déjà en cours, appui ignoré");
             continue;
         }
-        let (ring, saving, out_dir) = (ring.clone(), saving.clone(), out_dir.clone());
+        let (ring, saving, out_dir, audio) =
+            (ring.clone(), saving.clone(), out_dir.clone(), audio.clone());
         std::thread::spawn(move || {
-            match save_clip(&ring, pressed, clip, &format, &out_dir) {
+            match save_clip(&ring, pressed, clip, &video, audio.as_ref(), &out_dir) {
                 Ok(path) => info!("clip sauvegardé : {}", path.display()),
                 Err(e) => error!("échec de la sauvegarde : {e:#}"),
             }
@@ -105,19 +117,20 @@ fn run() -> Result<()> {
 fn save_clip(
     ring: &Mutex<Ring>,
     pressed: i64,
-    clip: i64,
-    format: &VideoFormat,
+    duration: i64,
+    video: &VideoFormat,
+    audio: Option<&AudioFormat>,
     dir: &Path,
 ) -> Result<PathBuf> {
     mf::startup()?;
     // L'encodeur a quelques images de retard : on attend qu'il ait sorti l'instant de
     // l'appui (OBS fait de même avec `save_ts`).
     let deadline = Instant::now() + CATCH_UP;
-    let packets = loop {
+    let clip = loop {
         {
             let ring = ring.lock().map_err(|_| anyhow!("ring empoisonné"))?;
             if ring.last_ts().is_some_and(|ts| ts >= pressed) {
-                break ring.snapshot(pressed, clip);
+                break ring.snapshot(pressed, duration);
             }
         }
         if Instant::now() > deadline {
@@ -125,7 +138,13 @@ fn save_clip(
         }
         std::thread::sleep(Duration::from_millis(5));
     };
-    let seconds = packets.last().map_or(0, |l| l.ts - packets[0].ts) as f64 / SEC as f64;
-    info!("{} images, {seconds:.2} s", packets.len());
-    save::save(&packets, format, dir)
+    let v = &clip.video;
+    let seconds = v.last().map_or(0, |l| l.ts - v[0].ts) as f64 / SEC as f64;
+    info!(
+        "{} images, {seconds:.2} s, {} trames audio, t0 = {} (QPC 100 ns)",
+        v.len(),
+        clip.audio.len(),
+        v.first().map_or(0, |p| p.ts)
+    );
+    save::save(&clip, video, audio, dir)
 }

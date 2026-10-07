@@ -7,18 +7,27 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::core::HSTRING;
 
-use crate::mf;
-use crate::ring::Packet;
+use crate::audio;
+use crate::mf::{AudioFormat, SEC, VideoFormat};
+use crate::ring::{Clip, Packet};
+
+/// Durée d'une trame AAC : 1024 échantillons.
+const AAC_FRAME: i64 = 1024 * SEC / audio::RATE as i64;
 
 /// Écrit `clip` dans `dir/clip_AAAAMMJJ_HHMMSS.mp4` et renvoie le chemin.
-pub fn save(clip: &[Packet], format: &mf::VideoFormat, dir: &Path) -> Result<PathBuf> {
-    let first = clip.first().context("clip vide")?;
+pub fn save(
+    clip: &Clip,
+    video: &VideoFormat,
+    audio: Option<&AudioFormat>,
+    dir: &Path,
+) -> Result<PathBuf> {
+    let first = clip.video.first().context("clip vide")?;
     let header = sequence_header(&first.data).context("SPS/PPS absents de la keyframe")?;
     std::fs::create_dir_all(dir).with_context(|| format!("création de {}", dir.display()))?;
     let path = dir.join(file_name());
     let tmp = path.with_extension("mp4.tmp");
 
-    write_mp4(clip, &header, format, &tmp)?;
+    write_mp4(clip, &header, video, audio, &tmp)?;
     let bytes = std::fs::read(&tmp)?;
     std::fs::write(&tmp, faststart(bytes)?)?;
     // Écrire puis renommer : un kill en cours de route ne laisse jamais un .mp4 cassé.
@@ -35,9 +44,16 @@ fn file_name() -> String {
     )
 }
 
-fn write_mp4(clip: &[Packet], header: &[u8], format: &mf::VideoFormat, path: &Path) -> Result<()> {
-    let t0 = clip[0].ts;
-    let frame = format.frame_duration();
+fn write_mp4(
+    clip: &Clip,
+    header: &[u8],
+    video: &VideoFormat,
+    audio: Option<&AudioFormat>,
+    path: &Path,
+) -> Result<()> {
+    // Les deux pistes partent de la première image : même horloge QPC, même origine.
+    let t0 = clip.video[0].ts;
+    let frame = video.frame_duration();
     // SAFETY: API MF documentée ; chaque buffer est déverrouillé après copie.
     unsafe {
         let mut attrs = None;
@@ -49,33 +65,68 @@ fn write_mp4(clip: &[Packet], header: &[u8], format: &mf::VideoFormat, path: &Pa
         let writer = MFCreateSinkWriterFromURL(&HSTRING::from(path.as_os_str()), None, &attrs)
             .context("MFCreateSinkWriterFromURL")?;
 
-        let media_type = format.h264_type()?;
-        media_type.SetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, header)?;
-        let stream = writer.AddStream(&media_type).context("AddStream")?;
+        let video_type = video.h264_type()?;
+        video_type.SetBlob(&MF_MT_MPEG_SEQUENCE_HEADER, header)?;
         // Même type en entrée et en sortie : passthrough, aucun réencodage.
-        writer
-            .SetInputMediaType(stream, &media_type, None)
-            .context("SetInputMediaType")?;
+        let add = |t: &IMFMediaType| -> Result<u32> {
+            let stream = writer.AddStream(t).context("AddStream")?;
+            writer
+                .SetInputMediaType(stream, t, None)
+                .context("SetInputMediaType")?;
+            Ok(stream)
+        };
+        let video_stream = add(&video_type)?;
+        let audio_stream = audio.map(|a| add(&a.media_type()?)).transpose()?;
         writer.BeginWriting().context("BeginWriting")?;
 
-        for p in clip {
-            let buffer = MFCreateMemoryBuffer(p.data.len() as u32)?;
-            let mut ptr = std::ptr::null_mut();
-            buffer.Lock(&mut ptr, None, None)?;
-            std::ptr::copy_nonoverlapping(p.data.as_ptr(), ptr, p.data.len());
-            buffer.Unlock()?;
-            buffer.SetCurrentLength(p.data.len() as u32)?;
-
-            let sample = MFCreateSample()?;
-            sample.AddBuffer(&buffer)?;
-            sample.SetSampleTime(p.ts - t0)?;
-            sample.SetSampleDuration(frame)?;
-            sample.SetUINT32(&MFSampleExtension_CleanPoint, u32::from(p.key))?;
-            writer.WriteSample(stream, &sample).context("WriteSample")?;
+        // Écriture dans l'ordre des ts, pistes entrelacées.
+        let audio_packets = if audio_stream.is_some() {
+            &clip.audio[..]
+        } else {
+            &[]
+        };
+        let (mut v, mut a) = (
+            clip.video.iter().peekable(),
+            audio_packets.iter().peekable(),
+        );
+        loop {
+            let take_video = match (v.peek(), a.peek()) {
+                (Some(pv), Some(pa)) => pv.ts <= pa.ts,
+                (Some(_), None) => true,
+                (None, Some(_)) => false,
+                (None, None) => break,
+            };
+            let (p, stream, duration) = match (take_video, audio_stream) {
+                (true, _) => (v.next(), video_stream, frame),
+                (false, Some(s)) => (a.next(), s, AAC_FRAME),
+                (false, None) => break,
+            };
+            let Some(p) = p else { break };
+            writer
+                .WriteSample(stream, &sample(p, p.ts - t0, duration)?)
+                .context("WriteSample")?;
         }
         writer.Finalize().context("Finalize")?;
     }
     Ok(())
+}
+
+fn sample(p: &Packet, ts: i64, duration: i64) -> Result<IMFSample> {
+    // SAFETY: buffer MF de la bonne taille, déverrouillé après copie.
+    unsafe {
+        let buffer = MFCreateMemoryBuffer(p.data.len() as u32)?;
+        let mut ptr = std::ptr::null_mut();
+        buffer.Lock(&mut ptr, None, None)?;
+        std::ptr::copy_nonoverlapping(p.data.as_ptr(), ptr, p.data.len());
+        buffer.Unlock()?;
+        buffer.SetCurrentLength(p.data.len() as u32)?;
+        let sample = MFCreateSample()?;
+        sample.AddBuffer(&buffer)?;
+        sample.SetSampleTime(ts)?;
+        sample.SetSampleDuration(duration)?;
+        sample.SetUINT32(&MFSampleExtension_CleanPoint, u32::from(p.key))?;
+        Ok(sample)
+    }
 }
 
 /// SPS (7) + PPS (8) d'une unité d'accès Annex B, avec start codes : le format de

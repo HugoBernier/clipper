@@ -86,7 +86,7 @@ struct VideoFormat { width, height, fps, bitrate }       // mf.rs, commun encode
 | Couleurs | NV12 4:2:0, **BT.709 plage limitée**, réglé sur le VideoProcessor et étiqueté dans les types MF | Le VideoProcessor sort du BT.601 par défaut ([doc D3D11](https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-id3d11videocontext-videoprocessorsetoutputcolorspace)) |
 | Mise à l'échelle | VideoProcessor du driver. 3440→1720 est un ratio ×2 exact, donc peu de risque d'artefacts. | À juger à l'œil au spike B |
 | MP4 | H.264 + AAC, `moov` avant `mdat` (« faststart ») par **réécriture façon `qt-faststart`** : on déplace `moov` et on décale les offsets `stco`/`co64` de sa taille. Fonction pure, testée en TDD dans `save.rs`. | Recette web standard. `MF_MPEG4SINK_MOOV_BEFORE_MDAT` est **écarté** : sa recopie décale le `mdat` d'1 Mio et rend le fichier illisible (spike B). |
-| Audio | Timestamps du périphérique (`GetBuffer` → position QPC), silence inséré quand la loopback ne livre rien | Équivalent du réglage « Use device timestamps » d'OBS |
+| Audio | Timestamps du périphérique (`GetBuffer` → position QPC), silence inséré quand la loopback ne livre rien. `autoconvert` de WASAPI : PCM 16 bits 48 kHz stéréo livré par Windows, sans conversion à coder. | Équivalent du réglage « Use device timestamps » d'OBS. Vérifié : les ts WASAPI sont l'instant de rendu (0 à 10 ms dans le futur). |
 
 ### Pièges Media Foundation rencontrés
 
