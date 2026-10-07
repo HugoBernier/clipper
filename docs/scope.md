@@ -1,0 +1,65 @@
+# Scope
+
+## Le besoin
+
+Au raccourci, un MP4 des **30 dernières secondes** (image + son du jeu), qui s'envoie tel quel sur Discord. Rien n'est affiché, rien de tiers n'est installé.
+
+## Contraintes
+
+| Contrainte | Valeur |
+|---|---|
+| OS | Windows 11 |
+| GPU | AMD RX 6800 XT, driver seul (pas d'Adrenalin) |
+| Taille du clip | ≤ 19 Mo pour 30 s (limite Discord gratuite : 20 Mo) |
+| Codec | H.264 matériel (AMF) + AAC, conteneur MP4 |
+| Anti-cheat | EAC (Hunt: Showdown), BattlEye (R6 Siege) : aucune injection, aucun hook clavier bas niveau |
+| Démarrage | automatique avec Windows, sans fenêtre |
+
+## Dans le MVP
+
+- Capture de l'écran principal (Windows Graphics Capture).
+- Son système en loopback (WASAPI).
+- Buffer circulaire de paquets encodés en mémoire.
+- Raccourci global (`RegisterHotKey`) qui écrit le MP4.
+- Fichier de config TOML à côté de l'exe.
+- Log dans un fichier, et un bip pour signaler le succès ou l'échec.
+
+## Hors MVP (YAGNI) — ne pas implémenter sans demande explicite
+
+- micro ;
+- commande vocale ;
+- upload ;
+- UI, tray ou notifications ;
+- capture d'une fenêtre ou de plusieurs écrans ;
+- HDR ;
+- HEVC/AV1 ;
+- fallback logiciel ;
+- rotation des logs ;
+- rechargement à chaud de la config ;
+- hotkey « quitter » ;
+- installeur ;
+- ffmpeg ;
+- plusieurs durées de clip.
+
+## Définition de « réussi »
+
+Sur 2 semaines de jeu réel, **zéro appui sur le raccourci sans clip correct**. Un clip correct :
+- commence sur une keyframe ;
+- dure 30 à 31 s ;
+- pèse moins de 19 Mo ;
+- a un son synchronisé à moins d'une frame près ;
+- se lit dans Discord.
+
+D'ici là, OBS reste l'outil du quotidien.
+
+## Itérations
+
+| # | Étape | Fini quand |
+|---|---|---|
+| A | Spike : WGC → MFT H.264 AMF → `.h264` brut 10 s | Lisible dans VLC, CPU < 5 %, une keyframe par seconde |
+| B | Spike : paquets → MP4 via SinkWriter passthrough | Le MP4 se lit dans Discord (sinon, plan B : crate `mp4`) |
+| 1 | Ring + hotkey + config, vidéo seule | 1 h stable en mémoire, clip de 30 à 31 s sous la cible |
+| 2 | Audio + AAC + synchro QPC | Décalage < 1 frame, pas de dérive après un silence |
+| 3 | Prod : sous-système Windows, log, bips, démarrage auto | Survit à un reboot et à une soirée de Hunt et R6 |
+
+Sortie de secours : si le spike A dépasse 3 soirées, on passe l'encodage et le mux à ffmpeg, et on garde WGC et WASAPI en natif.
