@@ -45,8 +45,12 @@ Name: "{autoprograms}\Clipper"; Filename: "{app}\clipper.exe"
 [Registry]
 ; Même valeur que la case « Démarrer avec Windows » du menu de l'icône.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Clipper"; ValueData: """{app}\clipper.exe"""; Tasks: startup
-; Retirée à la désinstallation même si elle a été activée depuis le menu de l'icône.
+; Windows ne lance une entrée Run que si elle est approuvée (Gestionnaire des tâches >
+; Applications de démarrage) : 02 = activée.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: binary; ValueName: "Clipper"; ValueData: "02 00 00 00 00 00 00 00 00 00 00 00"; Tasks: startup
+; Retirées à la désinstallation même si activées depuis le menu de l'icône.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Clipper"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: none; ValueName: "Clipper"; Flags: uninsdeletevalue
 
 [Run]
 Filename: "{app}\clipper.exe"; Description: "Lancer Clipper"; Flags: nowait postinstall

@@ -13,7 +13,8 @@ use log::{error, info};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+    HKEY_CURRENT_USER, REG_BINARY, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_SZ, RegDeleteKeyValueW,
+    RegGetValueW, RegSetKeyValueW,
 };
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -28,6 +29,12 @@ const ID_STARTUP: usize = 2;
 const ID_QUIT: usize = 3;
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_VALUE: PCWSTR = w!("Clipper");
+/// État de l'entrée dans Gestionnaire des tâches > Applications de démarrage. Windows ne
+/// lance pas une entrée `Run` absente de cette clé (constaté au reboot du 2026-10-08).
+const APPROVED_KEY: PCWSTR =
+    w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
+/// 1er octet pair = activé (02), impair = désactivé (03) ; le reste est un horodatage.
+const APPROVED_ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 /// Icône de l'application (assets/clipper.rc), aussi utilisée pour la notification.
 const ICON_RESOURCE: u16 = 1;
 
@@ -205,45 +212,79 @@ fn show_menu(hwnd: HWND) -> Result<()> {
     Ok(())
 }
 
+/// Coché seulement si Windows lancera vraiment Clipper : valeur `Run` présente et
+/// non désactivée dans les Applications de démarrage.
 fn startup_enabled() -> bool {
-    // SAFETY: simple test d'existence de la valeur, sans tampon.
-    unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            RUN_KEY,
-            RUN_VALUE,
-            RRF_RT_REG_SZ,
-            None,
-            None,
-            None,
-        ) == ERROR_SUCCESS
-    }
+    let mut state = [0u8; 12];
+    let mut len = state.len() as u32;
+    // SAFETY: lectures de valeurs HKCU ; le tampon binaire a la taille annoncée.
+    let (run, approved) = unsafe {
+        (
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                RUN_KEY,
+                RUN_VALUE,
+                RRF_RT_REG_SZ,
+                None,
+                None,
+                None,
+            ),
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                APPROVED_KEY,
+                RUN_VALUE,
+                RRF_RT_REG_BINARY,
+                None,
+                Some(state.as_mut_ptr().cast()),
+                Some(&mut len),
+            ),
+        )
+    };
+    run == ERROR_SUCCESS && is_approved((approved == ERROR_SUCCESS).then(|| &state[..len as usize]))
+}
+
+fn is_approved(state: Option<&[u8]>) -> bool {
+    state.and_then(<[u8]>::first).is_some_and(|b| b & 1 == 0)
 }
 
 fn set_startup(enabled: bool) -> Result<()> {
-    // SAFETY: écriture ou suppression d'une valeur de HKCU\…\Run ; le tampon est une
-    // chaîne UTF-16 terminée par un zéro dont la taille est passée en octets.
-    let status = unsafe {
+    // SAFETY: écriture ou suppression de valeurs HKCU ; chaque tampon est passé avec
+    // sa taille en octets (chaîne UTF-16 terminée par un zéro, ou binaire).
+    unsafe {
         if enabled {
             let exe = std::env::current_exe()?;
             let value: Vec<u16> = run_command(&exe.to_string_lossy())
                 .encode_utf16()
                 .chain([0])
                 .collect();
-            RegSetKeyValueW(
+            check(RegSetKeyValueW(
                 HKEY_CURRENT_USER,
                 RUN_KEY,
                 RUN_VALUE,
                 REG_SZ.0,
                 Some(value.as_ptr().cast()),
                 (value.len() * 2) as u32,
-            )
+            ))?;
+            check(RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                APPROVED_KEY,
+                RUN_VALUE,
+                REG_BINARY.0,
+                Some(APPROVED_ENABLED.as_ptr().cast()),
+                APPROVED_ENABLED.len() as u32,
+            ))
         } else {
-            RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE)
+            check(RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE))?;
+            // Peut ne pas exister : seule l'absence compte.
+            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, APPROVED_KEY, RUN_VALUE);
+            Ok(())
         }
-    };
+    }
+}
+
+fn check(status: windows::Win32::Foundation::WIN32_ERROR) -> Result<()> {
     if status != ERROR_SUCCESS {
-        bail!("registre (Run) : erreur {}", status.0);
+        bail!("registre (démarrage avec Windows) : erreur {}", status.0);
     }
     Ok(())
 }
@@ -273,6 +314,16 @@ fn load_icon(instance: windows::Win32::Foundation::HINSTANCE) -> Result<HICON> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_approval_follows_task_manager_state() {
+        assert!(is_approved(Some(&APPROVED_ENABLED)));
+        assert!(is_approved(Some(&[6, 0, 0, 0])));
+        assert!(!is_approved(Some(&[3, 0, 0, 0])));
+        // Absente : Windows ne lance pas l'entrée.
+        assert!(!is_approved(None));
+        assert!(!is_approved(Some(&[])));
+    }
 
     #[test]
     fn run_command_quotes_the_path() {
