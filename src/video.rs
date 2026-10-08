@@ -14,7 +14,8 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Foundation::{E_FAIL, E_POINTER, HMODULE, LPARAM, POINT, WPARAM};
+use windows::Graphics::SizeInt32;
+use windows::Win32::Foundation::{E_FAIL, E_POINTER, HMODULE, LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -36,6 +37,14 @@ use crate::ring::{Packet, Ring};
 /// multithread-protected et chaque objet n'est utilisé que sous un Mutex.
 struct SendBox<T>(T);
 unsafe impl<T> Send for SendBox<T> {}
+
+impl<T> SendBox<T> {
+    /// Passer par une méthode fait capturer la boîte entière (donc `Send`) par une
+    /// closure, et non son champ seul (capture par champ de l'édition 2024).
+    fn get(&self) -> &T {
+        &self.0
+    }
+}
 
 /// Dernière image convertie, partagée entre la capture et l'horloge d'encodage.
 type Latest = Arc<Mutex<SendBox<Option<ID3D11Texture2D>>>>;
@@ -259,19 +268,39 @@ fn start_capture(
             warn!("bordure jaune de capture non désactivable : {e}");
         }
 
-        let converter = SendBox(Converter::new(
-            device,
-            context,
-            size.Width as u32,
-            size.Height as u32,
-            format,
-        )?);
+        let converter = Converter::new(device, context, size, format)?;
+        let state = Mutex::new(SendBox((converter, size)));
+        let (device, context, format) =
+            (SendBox(device.clone()), SendBox(context.clone()), *format);
+        let winrt_device = SendBox(winrt_device);
         pool.FrameArrived(&TypedEventHandler::new(
             move |pool: Ref<Direct3D11CaptureFramePool>, _: Ref<IInspectable>| {
-                let frame = pool.ok()?.TryGetNextFrame()?;
+                let pool = pool.ok()?;
+                let frame = pool.TryGetNextFrame()?;
+                let mut state = state
+                    .lock()
+                    .map_err(|_| windows::core::Error::from_hresult(E_FAIL))?;
+                let SendBox((converter, size)) = &mut *state;
+                // Changement de résolution (jeu en plein écran exclusif, réglage
+                // Windows) : le pool garde sa taille de départ, on le recrée.
+                let content = frame.ContentSize()?;
+                if content != *size {
+                    frame.Close()?;
+                    info!("résolution source {}x{}", content.Width, content.Height);
+                    pool.Recreate(
+                        winrt_device.get(),
+                        DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                        2,
+                        content,
+                    )?;
+                    *converter = Converter::new(device.get(), context.get(), content, &format)
+                        .map_err(|e| windows::core::Error::new(E_FAIL, format!("{e:#}")))?;
+                    *size = content;
+                    return Ok(());
+                }
                 let access: IDirect3DDxgiInterfaceAccess = frame.Surface()?.cast()?;
                 let texture: ID3D11Texture2D = access.GetInterface()?;
-                let nv12 = converter.0.convert(&texture)?;
+                let nv12 = converter.convert(&texture)?;
                 frame.Close()?;
                 latest
                     .lock()
@@ -297,13 +326,14 @@ struct Converter {
 }
 
 impl Converter {
-    unsafe fn new(
+    fn new(
         device: &ID3D11Device,
         context: &ID3D11DeviceContext,
-        src_w: u32,
-        src_h: u32,
+        src: SizeInt32,
         format: &VideoFormat,
     ) -> Result<Self> {
+        let (src_w, src_h) = (src.Width as u32, src.Height as u32);
+        // SAFETY: création et réglage d'un VideoProcessor D3D11 documentés.
         unsafe {
             let video_device: ID3D11VideoDevice = device.cast()?;
             let video_context: ID3D11VideoContext = context.cast()?;
@@ -334,6 +364,26 @@ impl Converter {
                 &processor,
                 DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709,
             );
+            // Proportions conservées : bandes noires plutôt qu'une image étirée.
+            let (x, y, w, h) = fit(src_w, src_h, format.width, format.height);
+            let dest = RECT {
+                left: x as i32,
+                top: y as i32,
+                right: (x + w) as i32,
+                bottom: (y + h) as i32,
+            };
+            video_context.VideoProcessorSetStreamDestRect(&processor, 0, true, Some(&dest));
+            let black = D3D11_VIDEO_COLOR {
+                Anonymous: D3D11_VIDEO_COLOR_0 {
+                    YCbCr: D3D11_VIDEO_COLOR_YCbCrA {
+                        Y: 16.0 / 255.0,
+                        Cb: 0.5,
+                        Cr: 0.5,
+                        A: 1.0,
+                    },
+                },
+            };
+            video_context.VideoProcessorSetOutputBackgroundColor(&processor, true, &black);
             Ok(Self {
                 device: device.clone(),
                 video_device,
@@ -506,4 +556,43 @@ unsafe fn process_output(mft: &IMFTransform) -> Result<Option<IMFSample>> {
 fn has_idr(data: &[u8]) -> bool {
     data.windows(4)
         .any(|w| w[..3] == [0, 0, 1] && w[3] & 0x1f == 5)
+}
+
+/// Rectangle (x, y, largeur, hauteur) de `src` mis à l'échelle dans `dst` sans
+/// déformation, centré, dimensions paires (NV12).
+fn fit(src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> (u32, u32, u32, u32) {
+    let (w, h) = if u64::from(src_w) * u64::from(dst_h) > u64::from(dst_w) * u64::from(src_h) {
+        (
+            dst_w,
+            (u64::from(dst_w) * u64::from(src_h) / u64::from(src_w)) as u32 & !1,
+        )
+    } else {
+        (
+            (u64::from(dst_h) * u64::from(src_w) / u64::from(src_h)) as u32 & !1,
+            dst_h,
+        )
+    };
+    (((dst_w - w) / 2) & !1, ((dst_h - h) / 2) & !1, w, h)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn same_aspect_fills_output() {
+        assert_eq!(fit(3440, 1440, 1720, 720), (0, 0, 1720, 720));
+    }
+
+    #[test]
+    fn narrower_source_is_pillarboxed() {
+        // 16:9 dans 21:9 : 1280x720 centré, bandes de 220 px.
+        assert_eq!(fit(1920, 1080, 1720, 720), (220, 0, 1280, 720));
+    }
+
+    #[test]
+    fn wider_source_is_letterboxed() {
+        // 32:9 dans 21:9 : pleine largeur, hauteur 482 (paire), centré.
+        assert_eq!(fit(5120, 1440, 1720, 720), (0, 118, 1720, 482));
+    }
 }
