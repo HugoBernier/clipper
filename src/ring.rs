@@ -74,6 +74,11 @@ impl Ring {
         self.video.back().map(|p| p.ts)
     }
 
+    /// ts de la dernière trame audio, même usage que `last_ts`.
+    pub fn last_audio_ts(&self) -> Option<i64> {
+        self.audio.back().map(|p| p.ts)
+    }
+
     /// Clip de `dur` se terminant à `end` : la vidéo part de la dernière keyframe de
     /// ts ≤ `end - dur` (la plus ancienne à défaut) ; l'audio couvre le même intervalle.
     pub fn snapshot(&self, end: i64, dur: i64) -> Clip {
@@ -205,6 +210,13 @@ mod tests {
             }
         }
         ring
+    }
+
+    #[test]
+    fn last_audio_ts_is_the_newest_audio_packet() {
+        let ring = with_audio(25, 100, 10);
+        assert_eq!(ring.last_audio_ts(), Some(99));
+        assert_eq!(Ring::new(10).last_audio_ts(), None);
     }
 
     #[test]

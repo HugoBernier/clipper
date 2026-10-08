@@ -1,4 +1,4 @@
-//! Audio : loopback WASAPI (son du PC) → timeline QPC → MFT AAC → `Ring`.
+//! Audio : son du PC (loopback WASAPI) + micro → timelines QPC → mixeur → MFT AAC → `Ring`.
 //!
 //! WASAPI date chaque paquet en QPC (« device timestamps » d'OBS) : la timeline place
 //! les échantillons sur la même horloge que la vidéo, comble les trous par du silence
@@ -7,7 +7,7 @@
 use std::mem::ManuallyDrop;
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use log::{debug, error, info, warn};
@@ -15,6 +15,7 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::mf::{self, AudioFormat, SEC};
+use crate::mix::Mixer;
 use crate::ring::{Packet, Ring};
 
 pub const RATE: u32 = 48_000;
@@ -96,14 +97,15 @@ fn to_frames(duration: i64) -> u64 {
 struct SendBox<T>(T);
 unsafe impl<T> Send for SendBox<T> {}
 
-/// Démarre capture et encodage dans un thread dédié ; renvoie le format AAC une fois
-/// l'encodeur prêt. Une perte du périphérique est réessayée (silence entre-temps).
-pub fn spawn(bitrate: u32, ring: Arc<Mutex<Ring>>) -> Result<AudioFormat> {
+/// Démarre capture, mixage et encodage dans un thread dédié ; renvoie le format AAC
+/// une fois l'encodeur prêt. Une perte de périphérique est réessayée (silence
+/// entre-temps), sans jamais bloquer l'autre source.
+pub fn spawn(bitrate: u32, microphone: bool, ring: Arc<Mutex<Ring>>) -> Result<AudioFormat> {
     let (ready_tx, ready_rx) = channel();
     std::thread::Builder::new()
         .name("audio".into())
         .spawn(move || {
-            if let Err(e) = run(bitrate, &ring, &ready_tx) {
+            if let Err(e) = run(bitrate, microphone, &ring, &ready_tx) {
                 error!("audio arrêté : {e:#}");
                 let _ = ready_tx.send(Err(anyhow!("{e:#}")));
             }
@@ -113,19 +115,33 @@ pub fn spawn(bitrate: u32, ring: Arc<Mutex<Ring>>) -> Result<AudioFormat> {
         .context("thread audio mort pendant l'init")?
 }
 
-fn run(bitrate: u32, ring: &Mutex<Ring>, ready: &Sender<Result<AudioFormat>>) -> Result<()> {
+fn run(
+    bitrate: u32,
+    microphone: bool,
+    ring: &Mutex<Ring>,
+    ready: &Sender<Result<AudioFormat>>,
+) -> Result<()> {
     mf::startup()?;
     let encoder = Encoder::new(bitrate)?;
     let _ = ready.send(Ok(encoder.format()?));
-    let mut timeline = Timeline::new(mf::now());
+    // Origine commune : l'échantillon k de chaque source tombe au même instant.
+    let origin = mf::now();
+    let mut inputs = vec![Input::new(Source::System, 0, origin)];
+    if microphone {
+        inputs.push(Input::new(Source::Microphone, 1, origin));
+    }
+    let mut mixer = Mixer::new(inputs.len());
+    let mut encoded: u64 = 0;
     loop {
-        if let Err(e) = capture(&mut timeline, &encoder, ring) {
-            warn!("capture audio interrompue : {e:#} ; nouvel essai dans 1 s");
+        for input in &mut inputs {
+            input.poll(&mut mixer);
         }
-        std::thread::sleep(Duration::from_secs(1));
-        let ts = timeline.next_ts();
-        let silence = timeline.fill_until(mf::now());
-        encoder.encode(&vec![0; silence as usize * FRAME_BYTES], ts, ring)?;
+        let pcm = mixer.pull();
+        if !pcm.is_empty() {
+            encoder.encode(&pcm, origin + frames_duration(encoded), ring)?;
+            encoded += (pcm.len() / CHANNELS as usize) as u64;
+        }
+        std::thread::sleep(POLL);
     }
 }
 
@@ -133,56 +149,158 @@ fn frames_duration(frames: u64) -> i64 {
     (frames * SEC as u64 / u64::from(RATE)) as i64
 }
 
-/// Une session de capture sur le périphérique de sortie par défaut, jusqu'à erreur.
-fn capture(timeline: &mut Timeline, encoder: &Encoder, ring: &Mutex<Ring>) -> Result<()> {
-    let enumerator = wasapi::DeviceEnumerator::new()?;
-    let device = enumerator.get_default_device(&wasapi::Direction::Render)?;
-    let mut client = device.get_iaudioclient()?;
-    // autoconvert : le moteur audio livre directement du PCM 16 bits 48 kHz stéréo,
-    // quel que soit le format du périphérique (rééchantillonnage, downmix).
-    let format = wasapi::WaveFormat::new(16, 16, &wasapi::SampleType::Int, RATE as usize, 2, None);
-    // Direction::Capture sur un périphérique de rendu = mode loopback.
-    client.initialize_client(
-        &format,
-        &wasapi::Direction::Capture,
-        &wasapi::StreamMode::PollingShared {
-            autoconvert: true,
-            buffer_duration_hns: 2 * LAG,
-        },
-    )?;
-    let reader = client.get_audiocaptureclient()?;
-    client.start_stream()?;
-    info!("capture audio : {}", device.get_friendlyname()?);
+#[derive(Clone, Copy)]
+enum Source {
+    /// Son du PC : loopback du périphérique de sortie par défaut.
+    System,
+    /// Micro de communication par défaut (celui de Discord).
+    Microphone,
+}
 
+impl Source {
+    fn name(self) -> &'static str {
+        match self {
+            Source::System => "son du PC",
+            Source::Microphone => "micro",
+        }
+    }
+
+    fn open(self) -> Result<(Capture, String)> {
+        let enumerator = wasapi::DeviceEnumerator::new()?;
+        let device = match self {
+            Source::System => enumerator.get_default_device(&wasapi::Direction::Render)?,
+            Source::Microphone => enumerator.get_default_device_for_role(
+                &wasapi::Direction::Capture,
+                &wasapi::Role::Communications,
+            )?,
+        };
+        let mut client = device.get_iaudioclient()?;
+        // autoconvert : le moteur audio livre directement du PCM 16 bits 48 kHz stéréo,
+        // quel que soit le format du périphérique (rééchantillonnage, up/downmix).
+        let format =
+            wasapi::WaveFormat::new(16, 16, &wasapi::SampleType::Int, RATE as usize, 2, None);
+        // Direction::Capture sur un périphérique de rendu = mode loopback.
+        client.initialize_client(
+            &format,
+            &wasapi::Direction::Capture,
+            &wasapi::StreamMode::PollingShared {
+                autoconvert: true,
+                buffer_duration_hns: 2 * LAG,
+            },
+        )?;
+        let reader = client.get_audiocaptureclient()?;
+        client.start_stream()?;
+        let name = device.get_friendlyname()?;
+        Ok((
+            Capture {
+                _client: client,
+                reader,
+            },
+            name,
+        ))
+    }
+}
+
+struct Capture {
+    /// Gardé en vie : le relâcher arrête le flux.
+    _client: wasapi::AudioClient,
+    reader: wasapi::AudioCaptureClient,
+}
+
+/// Une source et sa position : livre au mixeur un flux continu (silence quand rien
+/// n'arrive ou que le périphérique manque) et rouvre le périphérique après une perte.
+struct Input {
+    source: Source,
+    index: usize,
+    timeline: Timeline,
+    capture: Option<Capture>,
+    retry_at: Instant,
+    failing: bool,
+}
+
+impl Input {
+    fn new(source: Source, index: usize, origin: i64) -> Self {
+        Self {
+            source,
+            index,
+            timeline: Timeline::new(origin),
+            capture: None,
+            retry_at: Instant::now(),
+            failing: false,
+        }
+    }
+
+    fn poll(&mut self, mixer: &mut Mixer) {
+        if self.capture.is_none() && Instant::now() >= self.retry_at {
+            match self.source.open() {
+                Ok((capture, device)) => {
+                    info!("capture {} : {device}", self.source.name());
+                    self.capture = Some(capture);
+                    self.failing = false;
+                }
+                Err(e) => self.fail(&e),
+            }
+        }
+        if let Some(capture) = &self.capture
+            && let Err(e) = read_packets(&capture.reader, &mut self.timeline, self.index, mixer)
+        {
+            self.capture = None;
+            self.fail(&e);
+        }
+        let silence = self.timeline.fill_until(mf::now());
+        mixer.push_silence(self.index, silence as usize * CHANNELS as usize);
+    }
+
+    /// Un seul avertissement par panne, pas un par seconde.
+    fn fail(&mut self, e: &anyhow::Error) {
+        if !self.failing {
+            warn!(
+                "{} indisponible : {e:#} ; nouvel essai chaque seconde",
+                self.source.name()
+            );
+        }
+        self.failing = true;
+        self.retry_at = Instant::now() + Duration::from_secs(1);
+    }
+}
+
+/// Lit tous les paquets disponibles et les place sur la timeline de la source.
+fn read_packets(
+    reader: &wasapi::AudioCaptureClient,
+    timeline: &mut Timeline,
+    index: usize,
+    mixer: &mut Mixer,
+) -> Result<()> {
     let mut pcm = Vec::new();
     loop {
         let frames = reader.get_next_packet_size()?.unwrap_or(0) as usize;
         if frames == 0 {
-            let ts = timeline.next_ts();
-            let silence = timeline.fill_until(mf::now());
-            encoder.encode(&vec![0; silence as usize * FRAME_BYTES], ts, ring)?;
-            std::thread::sleep(POLL);
-            continue;
+            return Ok(());
         }
         pcm.resize(frames * FRAME_BYTES, 0);
         let (read, info) = reader.read_from_device(&mut pcm)?;
         let read = read as usize;
-        if info.flags.silent {
-            pcm[..read * FRAME_BYTES].fill(0);
-        }
         let start_ts = timeline.next_ts();
         let placement = timeline.place(info.timestamp as i64, read as u64);
         debug!(
-            "paquet ts={} retard={:.1} ms frames={read} silent={} {placement:?} next={}",
+            "source {index} paquet ts={} retard={:.1} ms frames={read} silent={} {placement:?} next={start_ts}",
             info.timestamp,
             (mf::now() - info.timestamp as i64) as f64 / 1e4,
             info.flags.silent,
-            start_ts
         );
-        let mut block = vec![0; placement.silence as usize * FRAME_BYTES];
-        block.extend_from_slice(&pcm[placement.skip as usize * FRAME_BYTES..read * FRAME_BYTES]);
-        if !block.is_empty() {
-            encoder.encode(&block, start_ts, ring)?;
+        let channels = CHANNELS as usize;
+        let skip = placement.skip as usize;
+        mixer.push_silence(index, placement.silence as usize * channels);
+        if info.flags.silent {
+            mixer.push_silence(index, (read - skip) * channels);
+        } else {
+            let samples: Vec<i16> = pcm[skip * FRAME_BYTES..read * FRAME_BYTES]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|b| i16::from_le_bytes(*b))
+                .collect();
+            mixer.push(index, &samples);
         }
     }
 }
@@ -262,8 +380,9 @@ impl Encoder {
         AudioFormat::from_media_type(&media_type)
     }
 
-    /// Encode `pcm` (premier échantillon à `ts`) et pousse les trames AAC produites.
-    fn encode(&self, pcm: &[u8], ts: i64, ring: &Mutex<Ring>) -> Result<()> {
+    /// Encode `pcm` (stéréo entrelacé, premier échantillon à `ts`) et pousse les
+    /// trames AAC produites.
+    fn encode(&self, pcm: &[i16], ts: i64, ring: &Mutex<Ring>) -> Result<()> {
         if pcm.is_empty() {
             return Ok(());
         }
@@ -271,16 +390,17 @@ impl Encoder {
         // SAFETY: MFT synchrone : ProcessInput puis ProcessOutput jusqu'à NEED_MORE_INPUT ;
         // buffers déverrouillés après copie.
         unsafe {
-            let buffer = MFCreateMemoryBuffer(pcm.len() as u32)?;
+            let bytes = std::mem::size_of_val(pcm);
+            let buffer = MFCreateMemoryBuffer(bytes as u32)?;
             let mut ptr = std::ptr::null_mut();
             buffer.Lock(&mut ptr, None, None)?;
-            std::ptr::copy_nonoverlapping(pcm.as_ptr(), ptr, pcm.len());
+            std::ptr::copy_nonoverlapping(pcm.as_ptr().cast::<u8>(), ptr, bytes);
             buffer.Unlock()?;
-            buffer.SetCurrentLength(pcm.len() as u32)?;
+            buffer.SetCurrentLength(bytes as u32)?;
             let sample = MFCreateSample()?;
             sample.AddBuffer(&buffer)?;
             sample.SetSampleTime(ts)?;
-            sample.SetSampleDuration(frames_duration((pcm.len() / FRAME_BYTES) as u64))?;
+            sample.SetSampleDuration(frames_duration((pcm.len() / CHANNELS as usize) as u64))?;
             mft.ProcessInput(0, &sample, 0)
                 .context("AAC ProcessInput")?;
 

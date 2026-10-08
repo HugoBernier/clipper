@@ -3,6 +3,7 @@
 mod audio;
 mod config;
 mod mf;
+mod mix;
 mod ring;
 mod save;
 mod video;
@@ -54,7 +55,13 @@ fn init_log() -> Result<()> {
     let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA absent")?)
         .join("clipper");
     std::fs::create_dir_all(&dir)?;
-    let file = std::fs::File::create(dir.join("clipper.log"))?;
+    // Nom distinct en debug : ne pas écraser le log de la version installée.
+    let name = if cfg!(debug_assertions) {
+        "clipper-debug.log"
+    } else {
+        "clipper.log"
+    };
+    let file = std::fs::File::create(dir.join(name))?;
     let level = if std::env::var_os("CLIPPER_DEBUG").is_some() {
         log::LevelFilter::Debug
     } else {
@@ -101,7 +108,7 @@ fn run() -> Result<()> {
         main_thread,
     )?;
     // Sans audio (aucune sortie son, encodeur absent), on garde au moins la vidéo.
-    let audio = audio::spawn(AUDIO_BPS, ring.clone())
+    let audio = audio::spawn(AUDIO_BPS, config.microphone, ring.clone())
         .inspect_err(|e| warn!("clips sans son : {e:#}"))
         .ok();
 
@@ -167,18 +174,22 @@ fn save_clip(
     dir: &Path,
 ) -> Result<PathBuf> {
     mf::startup()?;
-    // L'encodeur a quelques images de retard : on attend qu'il ait sorti l'instant de
-    // l'appui (OBS fait de même avec `save_ts`).
+    // Les encodeurs ont du retard (quelques images ; l'audio jusqu'à ~100 ms quand une
+    // source est muette) : on attend qu'ils aient sorti l'instant de l'appui (OBS fait
+    // de même avec `save_ts`).
     let deadline = Instant::now() + CATCH_UP;
     let clip = loop {
         {
             let ring = ring.lock().map_err(|_| anyhow!("ring empoisonné"))?;
-            if ring.last_ts().is_some_and(|ts| ts >= pressed) {
+            let video_done = ring.last_ts().is_some_and(|ts| ts >= pressed);
+            let audio_done =
+                audio.is_none() || ring.last_audio_ts().is_some_and(|ts| ts >= pressed);
+            if video_done && audio_done {
                 break ring.snapshot(pressed, duration);
             }
         }
         if Instant::now() > deadline {
-            bail!("l'encodeur n'a pas rattrapé l'instant de l'appui");
+            bail!("les encodeurs n'ont pas rattrapé l'instant de l'appui");
         }
         std::thread::sleep(Duration::from_millis(5));
     };
