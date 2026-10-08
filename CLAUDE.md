@@ -34,7 +34,9 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-Spikes : `cargo run --example <nom>` (fichiers dans `examples/`, jetables, ils ne sont pas réutilisés par `src/`).
+Spikes : `cargo run --example <nom>` (fichiers dans `examples/`, jetables : supprimés une fois leur risque levé, jamais réutilisés par `src/`).
+
+Mesure de synchro A/V : lancer `tools/sync_stimulus.ps1` pendant que Clipper tourne, sauvegarder un clip, puis `cargo run --example sync_check -- <clip.mp4>`.
 
 ## Installeur et version installée
 
