@@ -61,8 +61,8 @@ D'ici là, OBS reste l'outil du quotidien.
 | 4 | Micro mixé au son du PC (voir ci-dessous) | Voix audible et synchro (< 1 image) avec le jeu ; micro absent ou débranché → clip quand même, avec le son du PC ; pas de dérive sur 1 h. **Code fait le 2026-10-08** : micro de communication capté (Scarlett Solo, paquets de 10 ms, ~8 ms de latence, aucune correction), mixeur pur (6 tests), clip mixé vidéo/audio alignés, 45 tests. **Reste à faire** : voix + tir en jeu, débrancher/rebrancher le micro, 1 h. **Corrigé le 2026-10-08** : voix seulement à gauche (la Scarlett Solo expose 2 canaux : micro à gauche, entrée instrument à droite) → micro converti en mono sur les deux canaux, comme le « Downmix to Mono » d'OBS ; la voix perd ~6 dB. |
 | 5 | Icône dans la zone de notification (voir ci-dessous) | Icône visible près de l'horloge ; menu : ouvrir le dossier des clips, « Démarrer avec Windows » (coché selon l'état réel), quitter ; l'icône revient si l'Explorateur redémarre. **Fait le 2026-10-08** : icône, info-bulle, menu testés par l'utilisateur ; aucun bouton dans la barre des tâches ; 48 tests. |
 | 6 | Installeur Windows (voir ci-dessous) | `ClipperSetup.exe` installe sans droits admin, crée l'entrée du menu Démarrer, propose le démarrage avec Windows et lance Clipper ; Clipper apparaît dans « Applications installées » avec son icône ; la désinstallation retire exe, raccourcis et démarrage auto, garde les clips ; réinstaller par-dessus une version qui tourne fonctionne. **Fait le 2026-10-08** : setup de 2,6 Mo ; testé en silencieux : installation par-dessus le Clipper en cours (fermé puis relancé), entrée « Clipper 0.1.0 » avec icône, menu Démarrer, démarrage auto ; désinstallation propre, clips conservés. Icône et version compilées dans l'exe (maquette SVG). **Reste à faire** : l'assistant graphique vu par l'utilisateur, le design définitif de l'icône. |
-| 7 | Processus de release (voir ci-dessous) | Conventional Commits appliqués ; CI verte sur `main` ; une Release PR release-please propose la version SemVer et le `CHANGELOG.md` ; sa fusion publie une release GitHub avec le setup construit par la CI |
-| 8 | Qualité réglable facilement (voir ci-dessous) | Choisir un préréglage de qualité depuis le menu de l'icône, appliqué sans relancer Clipper ; le clip suivant respecte la résolution, les fps et la taille cible du préréglage |
+| 7 | Processus de release (voir ci-dessous) | Conventional Commits appliqués ; CI verte sur `main` ; une Release PR release-please propose la version SemVer et le `CHANGELOG.md` ; sa fusion publie une release GitHub avec le setup construit par la CI **Fait le 2026-10-08** : dépôt privé `HugoBernier/clipper`, CI verte, release `v0.1.1` publiée par release-please avec `ClipperSetup-0.1.1.exe`. |
+| 8 | Qualité réglable facilement (voir ci-dessous) | Choisir un préréglage de qualité depuis le menu de l'icône, appliqué sans relancer Clipper ; le clip suivant respecte la résolution, les fps et la taille cible du préréglage **Fait le 2026-10-08** : sous-menu « Qualité » (3 préréglages, l'actif coché), bascule à chaud testée (720p60 ↔ 1440p60, clip suivant en 3440×1440, 34 Mo sous 48), audio ininterrompu. Mémoire stable sur 30 allers-retours (92 → 104 Mo) après correction d'une fuite (`IMFShutdown` de l'encodeur async, désabonnement WGC) ; reste ~3 handles par changement, attribués au pilote. 55 tests. |
 | 9 | Interface graphique (voir ci-dessous) | Une fenêtre claire, ouverte depuis l'icône : réglages (qualité, micro, raccourci, dossier, démarrage) et derniers clips à partager ; design fourni par Claude Design |
 
 ## Itération 4 : micro
@@ -133,11 +133,9 @@ D'ici là, OBS reste l'outil du quotidien.
 **Pourquoi** : la qualité (résolution, fps, taille cible) doit se changer sans éditer `clipper.toml` ni relancer Clipper.
 
 **Ce qui est dans l'itération**
-- **Préréglages nommés** dans la config (`quality = "…"`), chacun = hauteur, fps, taille cible. Proposition : « Discord gratuit » (720p60, 19 Mo), « Discord gratuit net » (1080p30, 19 Mo), « Nitro » (1440p60, 48 Mo). Les champs détaillés restent possibles pour un réglage sur mesure.
-- **Sous-menu « Qualité »** dans le menu de l'icône, avec le préréglage actif coché.
-- **Application à chaud** : changer de qualité redémarre seulement le pipeline vidéo (le buffer repart de zéro) ; la config est réécrite.
-
-**Question ouverte** : les préréglages et leurs valeurs ci-dessus conviennent-ils ? (à valider sur de vrais clips de jeu)
+- **Préréglages** (`config::PRESETS`) : un préréglage n'est qu'un trio hauteur / fps / taille cible, écrit tel quel dans `clipper.toml` (pas de nouveau champ ; une config modifiée à la main ne correspond à aucun préréglage et rien n'est coché). « Discord gratuit » (720p60, 19 Mo), « Discord gratuit, plus net » (1080p30, 19 Mo), « Discord Nitro Basic » (1440p60, 48 Mo).
+- **Sous-menu « Qualité »** dans le menu de l'icône, préréglage actif coché.
+- **Application à chaud** : le thread principal arrête le pipeline vidéo (drapeau vérifié à chaque image), vide le buffer, le relance au nouveau format ; l'audio continue.
 
 ## Itération 9 : interface graphique
 

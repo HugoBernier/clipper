@@ -19,12 +19,13 @@ Prérequis : Windows 10 1903 ou plus récent, GPU avec encodeur H.264 matériel 
 |---|---|
 | Enregistrer les 30 dernières secondes | **Alt+F10** (un son confirme) |
 | Retrouver les clips | `Vidéos\Clipper`, ou clic droit sur l'icône → *Ouvrir le dossier des clips* |
+| Changer la qualité | Clic droit sur l'icône → *Qualité* (720p 60 i/s, 1080p 30 i/s, 1440p 60 i/s pour Nitro) |
 | Démarrer avec Windows | Clic droit sur l'icône → *Démarrer avec Windows* |
 | Quitter | Clic droit sur l'icône → *Quitter* |
 
 ## Réglages
 
-Fichier `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), créé au premier lancement. Relancer Clipper après une modification.
+Fichier `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), créé au premier lancement. La qualité se change depuis le menu de l'icône ; pour les autres clés, relancer Clipper après une modification.
 
 | Clé | Défaut | Rôle |
 |---|---|---|
