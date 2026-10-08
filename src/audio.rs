@@ -15,7 +15,7 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::mf::{self, AudioFormat, SEC};
-use crate::mix::Mixer;
+use crate::mix::{Mixer, downmix_to_mono};
 use crate::ring::{Packet, Ring};
 
 pub const RATE: u32 = 48_000;
@@ -242,7 +242,13 @@ impl Input {
             }
         }
         if let Some(capture) = &self.capture
-            && let Err(e) = read_packets(&capture.reader, &mut self.timeline, self.index, mixer)
+            && let Err(e) = read_packets(
+                &capture.reader,
+                &mut self.timeline,
+                self.index,
+                matches!(self.source, Source::Microphone),
+                mixer,
+            )
         {
             self.capture = None;
             self.fail(&e);
@@ -269,6 +275,7 @@ fn read_packets(
     reader: &wasapi::AudioCaptureClient,
     timeline: &mut Timeline,
     index: usize,
+    mono: bool,
     mixer: &mut Mixer,
 ) -> Result<()> {
     let mut pcm = Vec::new();
@@ -294,12 +301,15 @@ fn read_packets(
         if info.flags.silent {
             mixer.push_silence(index, (read - skip) * channels);
         } else {
-            let samples: Vec<i16> = pcm[skip * FRAME_BYTES..read * FRAME_BYTES]
+            let mut samples: Vec<i16> = pcm[skip * FRAME_BYTES..read * FRAME_BYTES]
                 .as_chunks::<2>()
                 .0
                 .iter()
                 .map(|b| i16::from_le_bytes(*b))
                 .collect();
+            if mono {
+                downmix_to_mono(&mut samples);
+            }
             mixer.push(index, &samples);
         }
     }
