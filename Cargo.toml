@@ -15,3 +15,6 @@ windows = { version = "0.62.2", features = ["Foundation", "Graphics_Capture", "G
 [profile.release]
 lto = true
 panic = "abort"
+
+[build-dependencies]
+embed-resource = "3.0.12"

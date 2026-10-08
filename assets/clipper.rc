@@ -1,0 +1,27 @@
+// Icône de l'application (aussi utilisée par l'icône de notification, id 1) et
+// informations de version. Les VER_* viennent de build.rs (Cargo.toml).
+
+1 ICON "clipper.ico"
+
+1 VERSIONINFO
+FILEVERSION VER_MAJOR, VER_MINOR, VER_PATCH, 0
+PRODUCTVERSION VER_MAJOR, VER_MINOR, VER_PATCH, 0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040C04B0"
+    BEGIN
+      VALUE "FileDescription", "Clipper - replay buffer"
+      VALUE "ProductName", "Clipper"
+      VALUE "FileVersion", VER_STR
+      VALUE "ProductVersion", VER_STR
+      VALUE "OriginalFilename", "clipper.exe"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x040C, 1200
+  END
+END
