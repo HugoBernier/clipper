@@ -41,7 +41,7 @@ Spikes : `cargo run --example <nom>` (fichiers dans `examples/`, jetables, ils n
 - Exe : `%LOCALAPPDATA%\Programs\Clipper\clipper.exe`, avec son `clipper.toml` à côté.
 - Démarrage auto : raccourci `Clipper.lnk` dans `shell:startup` (le supprimer pour désactiver).
 - Log : `%LOCALAPPDATA%\clipper\clipper.log`. Clips : `Vidéos\Clipper`.
-- Mettre à jour : `cargo build --release`, arrêter le process `clipper`, copier `targetelease\clipper.exe` par-dessus, relancer via le raccourci.
+- Mettre à jour : `cargo build --release`, arrêter le process `clipper`, copier `target\release\clipper.exe` par-dessus, relancer via le raccourci.
 
 ## Avant de dire « fini »
 
