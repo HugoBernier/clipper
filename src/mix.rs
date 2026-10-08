@@ -40,9 +40,41 @@ impl Mixer {
     }
 }
 
+/// Stéréo entrelacé → même signal mono sur les deux canaux (moyenne L/R), comme le
+/// « Downmix to Mono » d'OBS. Pour les micros : une interface comme la Scarlett Solo
+/// expose 2 canaux (micro à gauche, entrée instrument à droite), la voix ne sortirait
+/// sinon que d'un côté.
+pub fn downmix_to_mono(stereo: &mut [i16]) {
+    for frame in stereo.as_chunks_mut::<2>().0 {
+        let mono = ((i32::from(frame[0]) + i32::from(frame[1])) / 2) as i16;
+        *frame = [mono, mono];
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn voice_on_left_only_reaches_both_ears() {
+        let mut s = [1000, 0, -400, 0];
+        downmix_to_mono(&mut s);
+        assert_eq!(s, [500, 500, -200, -200]);
+    }
+
+    #[test]
+    fn already_mono_signal_is_unchanged() {
+        let mut s = [300, 300, -7, -7];
+        downmix_to_mono(&mut s);
+        assert_eq!(s, [300, 300, -7, -7]);
+    }
+
+    #[test]
+    fn downmix_cannot_overflow() {
+        let mut s = [i16::MAX, i16::MAX, i16::MIN, i16::MIN];
+        downmix_to_mono(&mut s);
+        assert_eq!(s, [i16::MAX, i16::MAX, i16::MIN, i16::MIN]);
+    }
 
     #[test]
     fn single_source_passes_through() {
