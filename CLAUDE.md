@@ -47,6 +47,11 @@ Mesure de synchro A/V : lancer `tools/sync_stimulus.ps1` pendant que Clipper tou
 - Log : `%LOCALAPPDATA%\clipper\clipper.log` (`clipper-debug.log` pour une build debug). Clips : `Vidéos\Clipper`.
 - Icône : maquette `assets/clipper.svg` ; après modification, régénérer `assets/clipper.ico` : `magick -background none -density 384 assets/clipper.svg -define icon:auto-resize=256,64,48,40,32,24,20,16 assets/clipper.ico`.
 
+## Commits et versions
+
+- **Conventional Commits** : `type(portée): description` en français, à l'impératif, sans majuscule ni point final. Types : `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`. Portées usuelles : `video`, `audio`, `mix`, `ring`, `save`, `tray`, `config`, `installer`. Changement cassant : `!` après le type et un pied `BREAKING CHANGE:`.
+- **SemVer** : la version de `Cargo.toml` est la seule source ; elle remonte dans l'exe et le setup. Processus de release : `docs/scope.md`, itération 7.
+
 ## Tester comme un vrai utilisateur
 
 Claude Code tourne dans l'application Claude, empaquetée **MSIX** : tout processus qu'il lance (PowerShell, l'installeur, Clipper) voit et écrit une copie **virtualisée** de `HKCU` et d'`AppData` (`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\…`). L'Explorateur, le Gestionnaire des tâches et un Clipper lancé normalement voient, eux, les vraies valeurs. Conséquences constatées le 2026-10-08 : une valeur `Run` écrite par Claude Code n'existe pas pour Windows, et le log lu par Claude Code peut être une copie figée.
