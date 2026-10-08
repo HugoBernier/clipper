@@ -61,7 +61,7 @@ D'ici là, OBS reste l'outil du quotidien.
 | 4 | Micro mixé au son du PC (voir ci-dessous) | Voix audible et synchro (< 1 image) avec le jeu ; micro absent ou débranché → clip quand même, avec le son du PC ; pas de dérive sur 1 h. **Code fait le 2026-10-08** : micro de communication capté (Scarlett Solo, paquets de 10 ms, ~8 ms de latence, aucune correction), mixeur pur (6 tests), clip mixé vidéo/audio alignés, 45 tests. **Reste à faire** : voix + tir en jeu, débrancher/rebrancher le micro, 1 h. **Corrigé le 2026-10-08** : voix seulement à gauche (la Scarlett Solo expose 2 canaux : micro à gauche, entrée instrument à droite) → micro converti en mono sur les deux canaux, comme le « Downmix to Mono » d'OBS ; la voix perd ~6 dB. |
 | 5 | Icône dans la zone de notification (voir ci-dessous) | Icône visible près de l'horloge ; menu : ouvrir le dossier des clips, « Démarrer avec Windows » (coché selon l'état réel), quitter ; l'icône revient si l'Explorateur redémarre. **Fait le 2026-10-08** : icône, info-bulle, menu testés par l'utilisateur ; aucun bouton dans la barre des tâches ; 48 tests. |
 | 6 | Installeur Windows (voir ci-dessous) | `ClipperSetup.exe` installe sans droits admin, crée l'entrée du menu Démarrer, propose le démarrage avec Windows et lance Clipper ; Clipper apparaît dans « Applications installées » avec son icône ; la désinstallation retire exe, raccourcis et démarrage auto, garde les clips ; réinstaller par-dessus une version qui tourne fonctionne. **Fait le 2026-10-08** : setup de 2,6 Mo ; testé en silencieux : installation par-dessus le Clipper en cours (fermé puis relancé), entrée « Clipper 0.1.0 » avec icône, menu Démarrer, démarrage auto ; désinstallation propre, clips conservés. Icône et version compilées dans l'exe (maquette SVG). **Reste à faire** : l'assistant graphique vu par l'utilisateur, le design définitif de l'icône. |
-| 7 | Processus de release (voir ci-dessous) | Conventional Commits appliqués, `CHANGELOG.md` à jour, version SemVer dans `Cargo.toml`, tag `vX.Y.Z` ; une release GitHub contient le setup, construit par la CI |
+| 7 | Processus de release (voir ci-dessous) | Conventional Commits appliqués ; CI verte sur `main` ; une Release PR release-please propose la version SemVer et le `CHANGELOG.md` ; sa fusion publie une release GitHub avec le setup construit par la CI |
 | 8 | Qualité réglable facilement (voir ci-dessous) | Choisir un préréglage de qualité depuis le menu de l'icône, appliqué sans relancer Clipper ; le clip suivant respecte la résolution, les fps et la taille cible du préréglage |
 | 9 | Interface graphique (voir ci-dessous) | Une fenêtre claire, ouverte depuis l'icône : réglages (qualité, micro, raccourci, dossier, démarrage) et derniers clips à partager ; design fourni par Claude Design |
 
@@ -118,15 +118,15 @@ D'ici là, OBS reste l'outil du quotidien.
 
 **Pourquoi** : qualité de travail. Historique lisible, versions qui ont un sens, releases reproductibles.
 
-**Ce qui est dans l'itération**
-- **Conventional Commits** (déjà la règle dans `CLAUDE.md` à partir du 2026-10-08) : `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, portée optionnelle (`audio`, `video`, `tray`, `installer`…), `!` pour un changement cassant.
-- **SemVer** : la version de `Cargo.toml` est la seule source (elle remonte déjà dans l'exe et le setup). Première release : `0.2.0` (0.x tant que le format de config peut changer).
-- **`CHANGELOG.md`** au format *Keep a Changelog*, dérivé des commits conventionnels.
-- **Tag `vX.Y.Z`** → la CI (GitHub Actions, runner Windows) compile, lance les tests, construit le setup Inno Setup et publie la release GitHub avec `ClipperSetup-X.Y.Z.exe` et les notes du changelog.
+**Ce qui est dans l'itération** (outils standard de la communauté)
+- **Conventional Commits** (règle dans `CLAUDE.md` depuis le 2026-10-08).
+- **SemVer** : la version de `Cargo.toml` est la seule source (elle remonte dans l'exe et le setup). `0.x` tant que le format de config peut changer ; `0.1.0` = l'état du 2026-10-08 avant Conventional Commits (tag `v0.1.0`).
+- **[release-please](https://github.com/googleapis/release-please)** (GitHub Action, type `rust`) : à chaque push sur `main`, une *Release PR* fixe la version suivante dans `Cargo.toml`/`Cargo.lock` et génère `CHANGELOG.md` (format *Keep a Changelog*) depuis les commits. La fusionner crée le tag `vX.Y.Z` et la release GitHub. Les commits antérieurs à `v0.1.0` sont ignorés (`bootstrap-sha`).
+- **CI** (`.github/workflows/ci.yml`, runner Windows) : `fmt --check`, `clippy -D warnings`, tests, à chaque push et PR.
+- **Release** (`.github/workflows/release.yml`) : quand une release est créée, compilation, tests, setup Inno Setup joint à la release.
+- Dépôt GitHub **privé** `clipper` ; `README.md` à la racine.
 
-**Questions ouvertes**
-1. Nom du dépôt GitHub, public ou privé ? (création et premier push : action à valider explicitement)
-2. Changelog écrit à la main à chaque release, ou généré depuis les commits (outil comme `git-cliff`, à valider) ?
+**Décisions (2026-10-08)** : dépôt `clipper` privé ; changelog généré (release-please plutôt que git-cliff : rien à installer en local, version et changelog dans la même PR).
 
 ## Itération 8 : qualité réglable facilement
 
