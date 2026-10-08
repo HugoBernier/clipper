@@ -39,10 +39,14 @@ pub fn save(
 
 /// Dossier Vidéos de Windows (suit un dossier déplacé, par ex. vers OneDrive).
 pub fn videos_dir() -> Result<PathBuf> {
+    known_folder(&FOLDERID_Videos)
+}
+
+/// Dossier connu de Windows (Vidéos, Démarrage…), là où l'utilisateur l'a placé.
+pub fn known_folder(id: &windows::core::GUID) -> Result<PathBuf> {
     // SAFETY: chaîne allouée par le shell, copiée puis libérée par CoTaskMemFree.
     unsafe {
-        let path = SHGetKnownFolderPath(&FOLDERID_Videos, KF_FLAG_DEFAULT, None)
-            .context("dossier Vidéos")?;
+        let path = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).context("dossier connu")?;
         let result = path.to_string();
         CoTaskMemFree(Some(path.0 as _));
         Ok(PathBuf::from(result?))
