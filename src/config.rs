@@ -47,8 +47,7 @@ impl Config {
     pub fn load_or_create(path: &Path) -> Result<Self> {
         if !path.exists() {
             let config = Self::default();
-            std::fs::write(path, toml::to_string_pretty(&config)?)
-                .with_context(|| format!("écriture de {}", path.display()))?;
+            config.save(path)?;
             return Ok(config);
         }
         let text = std::fs::read_to_string(path)?;
@@ -63,11 +62,61 @@ impl Config {
         Ok(config)
     }
 
+    pub fn save(&self, path: &Path) -> Result<()> {
+        std::fs::write(path, toml::to_string_pretty(self)?)
+            .with_context(|| format!("écriture de {}", path.display()))
+    }
+
     /// Débit vidéo pour qu'un clip (+ 1 s de GOP au pire) tienne sous `target_mb`.
     pub fn video_bitrate(&self, audio_bps: u32) -> Result<u32> {
         video_bitrate(self.target_mb, self.clip_seconds, 1, audio_bps)
     }
+
+    /// Index du préréglage qui correspond à la config, `None` si elle est personnalisée.
+    pub fn preset(&self) -> Option<usize> {
+        PRESETS.iter().position(|p| {
+            p.height == self.height && p.fps == self.fps && p.target_mb == self.target_mb
+        })
+    }
+
+    pub fn apply(&mut self, preset: &Preset) {
+        self.height = preset.height;
+        self.fps = preset.fps;
+        self.target_mb = preset.target_mb;
+    }
 }
+
+/// Préréglage de qualité, choisi depuis le menu de l'icône : rien d'autre qu'un trio
+/// hauteur / fps / taille cible, écrit tel quel dans la config.
+pub struct Preset {
+    pub name: &'static str,
+    pub height: u32,
+    pub fps: u32,
+    pub target_mb: f64,
+}
+
+/// Tailles cibles sous les limites d'upload de Discord : 20 Mo (gratuit), 50 Mo (Nitro
+/// Basic). À débit fixe, une résolution plus basse rend mieux en mouvement.
+pub const PRESETS: [Preset; 3] = [
+    Preset {
+        name: "Discord gratuit : 720p, 60 i/s",
+        height: 720,
+        fps: 60,
+        target_mb: 19.0,
+    },
+    Preset {
+        name: "Discord gratuit, plus net : 1080p, 30 i/s",
+        height: 1080,
+        fps: 30,
+        target_mb: 19.0,
+    },
+    Preset {
+        name: "Discord Nitro Basic : 1440p, 60 i/s",
+        height: 1440,
+        fps: 60,
+        target_mb: 48.0,
+    },
+];
 
 pub fn video_bitrate(target_mb: f64, clip_s: u32, gop_s: u32, audio_bps: u32) -> Result<u32> {
     let total_bps = target_mb * 1e6 * 8.0 * (1.0 - BITRATE_MARGIN) / f64::from(clip_s + gop_s);
@@ -194,6 +243,49 @@ mod tests {
     fn microphone_can_be_disabled() {
         let config: Config = toml::from_str("microphone = false").unwrap();
         assert!(!config.microphone);
+    }
+
+    #[test]
+    fn default_config_is_the_first_preset() {
+        assert_eq!(Config::default().preset(), Some(0));
+    }
+
+    #[test]
+    fn applying_a_preset_selects_it() {
+        let mut config = Config::default();
+        config.apply(&PRESETS[2]);
+        assert_eq!(config.preset(), Some(2));
+        assert_eq!((config.height, config.fps), (1440, 60));
+    }
+
+    #[test]
+    fn hand_tuned_config_matches_no_preset() {
+        let config = Config {
+            height: 900,
+            ..Config::default()
+        };
+        assert_eq!(config.preset(), None);
+    }
+
+    #[test]
+    fn every_preset_has_a_usable_bitrate() {
+        for p in &PRESETS {
+            let mut config = Config::default();
+            config.apply(p);
+            assert!(config.video_bitrate(160_000).is_ok(), "{}", p.name);
+            assert!(p.height.is_multiple_of(2), "{}", p.name);
+        }
+    }
+
+    #[test]
+    fn saved_preset_survives_a_reload() {
+        let path = std::env::temp_dir().join(format!("clipper-preset-{}.toml", std::process::id()));
+        let mut config = Config::default();
+        config.apply(&PRESETS[1]);
+        config.save(&path).unwrap();
+        let read = Config::load_or_create(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(read.preset(), Some(1));
     }
 
     #[test]

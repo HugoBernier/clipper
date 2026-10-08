@@ -69,6 +69,13 @@ impl Ring {
         }
     }
 
+    /// Vide le buffer (changement de qualité : les anciennes images n'ont plus le format
+    /// de l'encodeur).
+    pub fn clear(&mut self) {
+        self.video.clear();
+        self.audio.clear();
+    }
+
     /// ts de la dernière image : sert à savoir si l'encodeur a rattrapé un instant.
     pub fn last_ts(&self) -> Option<i64> {
         self.video.back().map(|p| p.ts)
@@ -217,6 +224,18 @@ mod tests {
         let ring = with_audio(25, 100, 10);
         assert_eq!(ring.last_audio_ts(), Some(99));
         assert_eq!(Ring::new(10).last_audio_ts(), None);
+    }
+
+    #[test]
+    fn clear_empties_video_and_audio() {
+        let mut ring = with_audio(25, 100, 10);
+        ring.clear();
+        assert_eq!(ring.last_ts(), None);
+        assert_eq!(ring.last_audio_ts(), None);
+        // Repart sur la prochaine keyframe, comme au démarrage.
+        ring.push_video(packet(200, false));
+        ring.push_video(packet(201, true));
+        assert_eq!(ring.timestamps(), vec![201]);
     }
 
     #[test]
