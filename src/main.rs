@@ -6,6 +6,7 @@ mod mf;
 mod mix;
 mod ring;
 mod save;
+mod tray;
 mod video;
 
 use std::path::{Path, PathBuf};
@@ -21,7 +22,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetMessageW, MB_ICONHAND, MB_OK, MESSAGEBOX_STYLE, MSG, WM_HOTKEY,
+    DispatchMessageW, GetMessageW, MB_ICONHAND, MB_OK, MESSAGEBOX_STYLE, MSG, TranslateMessage,
+    WM_HOTKEY,
 };
 
 use crate::config::{Config, parse_hotkey};
@@ -30,6 +32,8 @@ use crate::ring::Ring;
 
 /// AAC 160 kb/s (débits possibles de l'encodeur Windows : 96, 128, 160, 192).
 const AUDIO_BPS: u32 = 160_000;
+/// Délai max d'une sauvegarde en cours quand on quitte.
+const QUIT_WAIT: Duration = Duration::from_secs(10);
 /// Délai max pour que l'encodeur rattrape l'instant de l'appui.
 const CATCH_UP: Duration = Duration::from_secs(2);
 
@@ -128,12 +132,28 @@ fn run() -> Result<()> {
         config.clip_seconds,
         out_dir.display()
     );
+    // Sans icône (Explorateur absent…), Clipper reste utilisable au raccourci.
+    let _tray = tray::Tray::new(
+        out_dir.clone(),
+        format!(
+            "Clipper — {} : {} dernières secondes",
+            config.hotkey, config.clip_seconds
+        ),
+    )
+    .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
+    .ok();
 
     let saving = Arc::new(AtomicBool::new(false));
     let mut msg = MSG::default();
     // SAFETY: boucle de messages standard du thread courant.
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
         if msg.message != WM_HOTKEY {
+            // Messages de la fenêtre cachée de l'icône.
+            // SAFETY: message reçu par GetMessageW, transmis tel quel.
+            unsafe {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
             continue;
         }
         let pressed = mf::now();
@@ -162,6 +182,12 @@ fn run() -> Result<()> {
     if msg.wParam.0 == 1 {
         bail!("arrêt : erreur vidéo");
     }
+    // « Quitter » : on laisse finir une sauvegarde en cours.
+    let deadline = Instant::now() + QUIT_WAIT;
+    while saving.load(Ordering::SeqCst) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    info!("arrêt demandé");
     Ok(())
 }
 

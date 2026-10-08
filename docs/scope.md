@@ -28,7 +28,7 @@ Au raccourci, un MP4 des **30 dernières secondes** (image + son du jeu), qui s'
 
 - commande vocale ;
 - upload ;
-- UI, tray ou notifications ;
+- fenêtre, notifications ;
 - capture d'une fenêtre ou de plusieurs écrans ;
 - HDR ;
 - HEVC/AV1 ;
@@ -61,6 +61,7 @@ D'ici là, OBS reste l'outil du quotidien.
 | 2 | Audio + AAC + synchro QPC | Décalage < 1 frame, pas de dérive après un silence. **Mesuré le 2026-10-07** (stimulus flash + bip, instants QPC) : le son est placé à l'instant QPC où Windows le joue, l'image 16 à 32 ms après l'événement à l'écran (≤ ~1 image propre à Clipper). Silences comblés exactement, sans dérive. **Validé en jeu le 2026-10-07** : environ 1 image de retard, invisible. |
 | 3 | Prod : sous-système Windows, log, bips, démarrage auto | Survit à un reboot et à une soirée de Hunt et R6. **Code fait le 2026-10-08** : pas de console, log fichier en heure locale, bips, clips dans Vidéos\Clipper, changement de résolution géré (bandes noires), double appui ignoré (testé), 37 tests. Installé avec démarrage auto le 2026-10-08 ; clips avec son validés par l'utilisateur. **Reste à faire** : reboot, soirée de jeu et cas limites en jeu. |
 | 4 | Micro mixé au son du PC (voir ci-dessous) | Voix audible et synchro (< 1 image) avec le jeu ; micro absent ou débranché → clip quand même, avec le son du PC ; pas de dérive sur 1 h. **Code fait le 2026-10-08** : micro de communication capté (Scarlett Solo, paquets de 10 ms, ~8 ms de latence, aucune correction), mixeur pur (6 tests), clip mixé vidéo/audio alignés, 45 tests. **Reste à faire** : voix + tir en jeu, débrancher/rebrancher le micro, 1 h. |
+| 5 | Icône dans la zone de notification (voir ci-dessous) | Icône visible près de l'horloge ; menu : ouvrir le dossier des clips, « Démarrer avec Windows » (coché selon l'état réel), quitter ; l'icône revient si l'Explorateur redémarre. **Fait le 2026-10-08** : icône, info-bulle, menu testés par l'utilisateur ; aucun bouton dans la barre des tâches ; 48 tests. |
 
 ## Itération 4 : micro
 
@@ -84,5 +85,18 @@ D'ici là, OBS reste l'outil du quotidien.
 1. Micro activé par défaut ; `microphone = false` dans `clipper.toml` pour le couper.
 2. Pas de réglage de volume pour l'instant : on juge sur les vrais clips.
 3. Micro de communication par défaut (celui de Discord).
+
+## Itération 5 : icône dans la zone de notification
+
+**Pourquoi** : sans fenêtre ni icône, Clipper est invisible et ne se quitte que par le Gestionnaire des tâches. Un outil Windows d'arrière-plan vit près de l'horloge (comme Discord, Medal, ShadowPlay).
+
+**Ce qui est dans l'itération**
+- Icône (point rouge « enregistrement », dessinée par le programme) et info-bulle « Clipper — Alt+F10 ».
+- Menu au clic droit : **Ouvrir le dossier des clips**, **Démarrer avec Windows** (case à cocher), **Quitter**.
+- Démarrage avec Windows par la clé de registre `HKCU\…\Run` (comme Discord, Steam) ; l'ancien raccourci du dossier Démarrage est supprimé à la mise à jour, pour éviter un double lancement.
+- Quitter attend la fin d'une sauvegarde en cours.
+- Une fenêtre cachée reçoit les messages de l'icône ; elle n'apparaît ni à l'écran ni dans la barre des tâches.
+
+**Hors itération** : icône de l'exe dans l'Explorateur (demande une ressource compilée, donc une crate ou un script de build), notification Windows à chaque clip (le bip suffit).
 
 Sortie de secours : si le spike A dépasse 3 soirées, on passe l'encodage et le mux à ffmpeg, et on garde WGC et WASAPI en natif.

@@ -1,0 +1,316 @@
+//! Icône dans la zone de notification : info-bulle et menu (dossier des clips,
+//! démarrage avec Windows, quitter).
+//!
+//! Une fenêtre cachée reçoit les messages de l'icône ; elle n'a pas de style
+//! visible, donc ni fenêtre à l'écran ni bouton dans la barre des tâches.
+
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+
+use anyhow::{Context, Result, bail};
+use log::{error, info};
+use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Registry::{
+    HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+};
+use windows::Win32::UI::Shell::{
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+};
+use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::{PCWSTR, w};
+
+/// Message envoyé par l'icône à la fenêtre cachée.
+const WM_TRAY: u32 = WM_APP + 1;
+const ID_OPEN: usize = 1;
+const ID_STARTUP: usize = 2;
+const ID_QUIT: usize = 3;
+const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+const RUN_VALUE: PCWSTR = w!("Clipper");
+const ICON_SIZE: i32 = 32;
+
+/// État lu par la procédure de fenêtre (fonction `extern "system"` sans contexte).
+static CLIPS_DIR: OnceLock<PathBuf> = OnceLock::new();
+static TOOLTIP: OnceLock<String> = OnceLock::new();
+static ICON: AtomicUsize = AtomicUsize::new(0);
+/// Diffusé par l'Explorateur quand il redémarre : il faut remettre l'icône.
+static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+
+/// L'icône vit tant que cette valeur existe.
+pub struct Tray {
+    hwnd: HWND,
+}
+
+impl Tray {
+    /// À créer sur le thread qui fait tourner la boucle de messages.
+    pub fn new(clips_dir: PathBuf, tooltip: String) -> Result<Self> {
+        let _ = CLIPS_DIR.set(clips_dir);
+        let _ = TOOLTIP.set(tooltip);
+        // SAFETY: création classique d'une classe et d'une fenêtre Win32 cachée.
+        unsafe {
+            let instance = GetModuleHandleW(None).context("GetModuleHandleW")?;
+            let class = WNDCLASSW {
+                lpfnWndProc: Some(window_proc),
+                hInstance: instance.into(),
+                lpszClassName: w!("ClipperTray"),
+                ..Default::default()
+            };
+            if RegisterClassW(&class) == 0 {
+                bail!("RegisterClassW");
+            }
+            let hwnd = CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("ClipperTray"),
+                w!("Clipper"),
+                WINDOW_STYLE::default(),
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(instance.into()),
+                None,
+            )
+            .context("CreateWindowExW")?;
+            TASKBAR_CREATED.store(
+                RegisterWindowMessageW(w!("TaskbarCreated")),
+                Ordering::Relaxed,
+            );
+            ICON.store(create_icon()?.0 as usize, Ordering::Relaxed);
+            add_icon(hwnd)?;
+            Ok(Self { hwnd })
+        }
+    }
+}
+
+impl Drop for Tray {
+    fn drop(&mut self) {
+        // Sans ça, l'icône reste affichée jusqu'au survol de la souris.
+        let data = NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: self.hwnd,
+            uID: 1,
+            ..Default::default()
+        };
+        // SAFETY: suppression de l'icône ajoutée par `add_icon`.
+        unsafe {
+            let _ = Shell_NotifyIconW(NIM_DELETE, &data);
+            let _ = DestroyWindow(self.hwnd);
+        }
+    }
+}
+
+fn add_icon(hwnd: HWND) -> Result<()> {
+    let mut data = NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: 1,
+        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP,
+        uCallbackMessage: WM_TRAY,
+        hIcon: HICON(ICON.load(Ordering::Relaxed) as _),
+        ..Default::default()
+    };
+    let tip: Vec<u16> = TOOLTIP
+        .get()
+        .map_or("Clipper", String::as_str)
+        .encode_utf16()
+        .collect();
+    let n = tip.len().min(data.szTip.len() - 1);
+    data.szTip[..n].copy_from_slice(&tip[..n]);
+    // SAFETY: structure complète, fenêtre valide.
+    if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
+        bail!("Shell_NotifyIconW");
+    }
+    Ok(())
+}
+
+unsafe extern "system" fn window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if msg == WM_TRAY {
+        // Sans NIM_SETVERSION, lParam porte directement le message souris.
+        let mouse = lparam.0 as u32;
+        if (mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP)
+            && let Err(e) = show_menu(hwnd)
+        {
+            error!("menu de l'icône : {e:#}");
+        }
+        return LRESULT(0);
+    }
+    if msg == TASKBAR_CREATED.load(Ordering::Relaxed) {
+        if let Err(e) = add_icon(hwnd) {
+            error!("icône non restaurée après redémarrage de l'Explorateur : {e:#}");
+        }
+        return LRESULT(0);
+    }
+    // SAFETY: traitement par défaut des autres messages.
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+fn show_menu(hwnd: HWND) -> Result<()> {
+    let startup = startup_enabled();
+    // SAFETY: menu contextuel classique ; SetForegroundWindow avant TrackPopupMenu et
+    // WM_NULL après sont requis pour que le menu se ferme en cliquant ailleurs.
+    let choice = unsafe {
+        let menu = CreatePopupMenu()?;
+        AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Ouvrir le dossier des clips"))?;
+        let check = if startup { MF_CHECKED } else { MF_UNCHECKED };
+        AppendMenuW(
+            menu,
+            MF_STRING | check,
+            ID_STARTUP,
+            w!("Démarrer avec Windows"),
+        )?;
+        AppendMenuW(menu, MF_SEPARATOR, 0, None)?;
+        AppendMenuW(menu, MF_STRING, ID_QUIT, w!("Quitter"))?;
+        let mut cursor = POINT::default();
+        GetCursorPos(&mut cursor)?;
+        let _ = SetForegroundWindow(hwnd);
+        let choice = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            cursor.x,
+            cursor.y,
+            None,
+            hwnd,
+            None,
+        );
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+        DestroyMenu(menu)?;
+        choice.0 as usize
+    };
+    match choice {
+        ID_OPEN => {
+            let dir = CLIPS_DIR.get().context("dossier des clips inconnu")?;
+            std::fs::create_dir_all(dir)?;
+            std::process::Command::new("explorer").arg(dir).spawn()?;
+        }
+        ID_STARTUP => {
+            set_startup(!startup)?;
+            info!(
+                "démarrage avec Windows : {}",
+                if startup { "désactivé" } else { "activé" }
+            );
+        }
+        // SAFETY: termine la boucle de messages du thread principal.
+        ID_QUIT => unsafe { PostQuitMessage(0) },
+        _ => {}
+    }
+    Ok(())
+}
+
+fn startup_enabled() -> bool {
+    // SAFETY: simple test d'existence de la valeur, sans tampon.
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            RUN_KEY,
+            RUN_VALUE,
+            RRF_RT_REG_SZ,
+            None,
+            None,
+            None,
+        ) == ERROR_SUCCESS
+    }
+}
+
+fn set_startup(enabled: bool) -> Result<()> {
+    // SAFETY: écriture ou suppression d'une valeur de HKCU\…\Run ; le tampon est une
+    // chaîne UTF-16 terminée par un zéro dont la taille est passée en octets.
+    let status = unsafe {
+        if enabled {
+            let exe = std::env::current_exe()?;
+            let value: Vec<u16> = run_command(&exe.to_string_lossy())
+                .encode_utf16()
+                .chain([0])
+                .collect();
+            RegSetKeyValueW(
+                HKEY_CURRENT_USER,
+                RUN_KEY,
+                RUN_VALUE,
+                REG_SZ.0,
+                Some(value.as_ptr().cast()),
+                (value.len() * 2) as u32,
+            )
+        } else {
+            RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE)
+        }
+    };
+    if status != ERROR_SUCCESS {
+        bail!("registre (Run) : erreur {}", status.0);
+    }
+    Ok(())
+}
+
+/// Commande de démarrage : chemin entre guillemets (les espaces sont courants).
+fn run_command(exe: &str) -> String {
+    format!("\"{exe}\"")
+}
+
+fn create_icon() -> Result<HICON> {
+    let pixels = record_dot(ICON_SIZE as usize);
+    let mask = vec![0u8; (ICON_SIZE * ICON_SIZE / 8) as usize];
+    // SAFETY: bitmaps créés à partir de tampons de la bonne taille, libérés après
+    // copie dans l'icône.
+    unsafe {
+        let color = CreateBitmap(ICON_SIZE, ICON_SIZE, 1, 32, Some(pixels.as_ptr().cast()));
+        let mask = CreateBitmap(ICON_SIZE, ICON_SIZE, 1, 1, Some(mask.as_ptr().cast()));
+        let info = ICONINFO {
+            fIcon: true.into(),
+            hbmMask: mask,
+            hbmColor: color,
+            ..Default::default()
+        };
+        let icon = CreateIconIndirect(&info).context("CreateIconIndirect");
+        let _ = DeleteObject(color.into());
+        let _ = DeleteObject(mask.into());
+        icon
+    }
+}
+
+/// Point rouge « enregistrement » sur fond transparent, bords lissés, en BGRA.
+fn record_dot(size: usize) -> Vec<u32> {
+    let center = size as f32 / 2.0;
+    let radius = size as f32 * 0.38;
+    (0..size * size)
+        .map(|i| {
+            let (x, y) = ((i % size) as f32 + 0.5, (i / size) as f32 + 0.5);
+            let distance = ((x - center).powi(2) + (y - center).powi(2)).sqrt();
+            let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
+            let alpha = (coverage * 255.0).round() as u32;
+            (alpha << 24) | 0x00E5_3935
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dot_is_opaque_in_the_middle_and_transparent_in_the_corners() {
+        let px = record_dot(32);
+        assert_eq!(px[16 * 32 + 16] >> 24, 255);
+        assert_eq!(px[0] >> 24, 0);
+        assert_eq!(px[32 * 32 - 1] >> 24, 0);
+    }
+
+    #[test]
+    fn dot_is_red() {
+        assert_eq!(record_dot(32)[16 * 32 + 16] & 0x00FF_FFFF, 0x00E5_3935);
+    }
+
+    #[test]
+    fn run_command_quotes_the_path() {
+        assert_eq!(
+            run_command(r"C:\Users\Jo Doe\clipper.exe"),
+            r#""C:\Users\Jo Doe\clipper.exe""#
+        );
+    }
+}
