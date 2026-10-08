@@ -4,35 +4,43 @@
 //! Une fenêtre cachée reçoit les messages de l'icône ; elle n'a pas de style
 //! visible, donc ni fenêtre à l'écran ni bouton dans la barre des tâches.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
-use log::{error, info};
+use log::{error, info, warn};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, IPersistFile,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{
-    HKEY_CURRENT_USER, REG_BINARY, REG_SZ, RRF_RT_REG_BINARY, RRF_RT_REG_SZ, RegDeleteKeyValueW,
-    RegGetValueW, RegSetKeyValueW,
+    HKEY_CURRENT_USER, REG_BINARY, RRF_RT_REG_BINARY, RegDeleteKeyValueW, RegGetValueW,
+    RegSetKeyValueW,
 };
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    FOLDERID_Startup, IShellLinkW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+    NOTIFYICONDATAW, Shell_NotifyIconW, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{PCWSTR, w};
+use windows::core::{HSTRING, Interface, PCWSTR, w};
+
+use crate::save;
 
 /// Message envoyé par l'icône à la fenêtre cachée.
 const WM_TRAY: u32 = WM_APP + 1;
 const ID_OPEN: usize = 1;
 const ID_STARTUP: usize = 2;
 const ID_QUIT: usize = 3;
-const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
-const RUN_VALUE: PCWSTR = w!("Clipper");
-/// État de l'entrée dans Gestionnaire des tâches > Applications de démarrage. Windows ne
-/// lance pas une entrée `Run` absente de cette clé (constaté au reboot du 2026-10-08).
+/// Démarrage avec Windows : raccourci dans le dossier Démarrage (`shell:startup`), la
+/// méthode documentée par Microsoft pour les applications de bureau (Telegram, Ollama
+/// font de même).
+const SHORTCUT: &str = "Clipper.lnk";
+/// État affiché dans Gestionnaire des tâches > Applications de démarrage.
 const APPROVED_KEY: PCWSTR =
-    w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
+    w!("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\StartupFolder");
+const APPROVED_VALUE: PCWSTR = w!("Clipper.lnk");
 /// 1er octet pair = activé (02), impair = désactivé (03) ; le reste est un horodatage.
 const APPROVED_ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 /// Icône de l'application (assets/clipper.rc), aussi utilisée pour la notification.
@@ -87,7 +95,13 @@ impl Tray {
                 Ordering::Relaxed,
             );
             ICON.store(load_icon(instance.into())?.0 as usize, Ordering::Relaxed);
-            add_icon(hwnd)?;
+            // Zone de notification pas encore prête : la fenêtre reste, et l'icône sera
+            // ajoutée au message « TaskbarCreated ».
+            if let Err(e) = add_icon(hwnd) {
+                warn!(
+                    "icône pas encore ajoutée ({e:#}) ; nouvel essai quand l'Explorateur sera prêt"
+                );
+            }
             Ok(Self { hwnd })
         }
     }
@@ -212,86 +226,80 @@ fn show_menu(hwnd: HWND) -> Result<()> {
     Ok(())
 }
 
-/// Coché seulement si Windows lancera vraiment Clipper : valeur `Run` présente et
-/// non désactivée dans les Applications de démarrage.
+fn shortcut_path() -> Result<PathBuf> {
+    Ok(save::known_folder(&FOLDERID_Startup)?.join(SHORTCUT))
+}
+
+/// Coché si le raccourci existe et n'est pas désactivé dans le Gestionnaire des tâches.
 fn startup_enabled() -> bool {
     let mut state = [0u8; 12];
     let mut len = state.len() as u32;
-    // SAFETY: lectures de valeurs HKCU ; le tampon binaire a la taille annoncée.
-    let (run, approved) = unsafe {
-        (
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                RUN_KEY,
-                RUN_VALUE,
-                RRF_RT_REG_SZ,
-                None,
-                None,
-                None,
-            ),
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                APPROVED_KEY,
-                RUN_VALUE,
-                RRF_RT_REG_BINARY,
-                None,
-                Some(state.as_mut_ptr().cast()),
-                Some(&mut len),
-            ),
+    // SAFETY: lecture d'une valeur binaire HKCU dans un tampon de la taille annoncée.
+    let found = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            APPROVED_KEY,
+            APPROVED_VALUE,
+            RRF_RT_REG_BINARY,
+            None,
+            Some(state.as_mut_ptr().cast()),
+            Some(&mut len),
         )
-    };
-    run == ERROR_SUCCESS && is_approved((approved == ERROR_SUCCESS).then(|| &state[..len as usize]))
+    } == ERROR_SUCCESS;
+    shortcut_path().is_ok_and(|p| p.exists()) && !is_disabled(found.then(|| &state[..len as usize]))
 }
 
-fn is_approved(state: Option<&[u8]>) -> bool {
-    state.and_then(<[u8]>::first).is_some_and(|b| b & 1 == 0)
+/// Désactivé seulement si le Gestionnaire des tâches l'a marqué (1er octet impair).
+fn is_disabled(state: Option<&[u8]>) -> bool {
+    state.and_then(<[u8]>::first).is_some_and(|b| b & 1 == 1)
 }
 
 fn set_startup(enabled: bool) -> Result<()> {
-    // SAFETY: écriture ou suppression de valeurs HKCU ; chaque tampon est passé avec
-    // sa taille en octets (chaîne UTF-16 terminée par un zéro, ou binaire).
-    unsafe {
-        if enabled {
-            let exe = std::env::current_exe()?;
-            let value: Vec<u16> = run_command(&exe.to_string_lossy())
-                .encode_utf16()
-                .chain([0])
-                .collect();
-            check(RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                RUN_KEY,
-                RUN_VALUE,
-                REG_SZ.0,
-                Some(value.as_ptr().cast()),
-                (value.len() * 2) as u32,
-            ))?;
-            check(RegSetKeyValueW(
+    let link = shortcut_path()?;
+    if enabled {
+        create_shortcut(&link, &std::env::current_exe()?)?;
+        // SAFETY: écriture d'une valeur binaire HKCU, taille passée en octets.
+        let status = unsafe {
+            RegSetKeyValueW(
                 HKEY_CURRENT_USER,
                 APPROVED_KEY,
-                RUN_VALUE,
+                APPROVED_VALUE,
                 REG_BINARY.0,
                 Some(APPROVED_ENABLED.as_ptr().cast()),
                 APPROVED_ENABLED.len() as u32,
-            ))
-        } else {
-            check(RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, RUN_VALUE))?;
-            // Peut ne pas exister : seule l'absence compte.
-            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, APPROVED_KEY, RUN_VALUE);
-            Ok(())
+            )
+        };
+        if status != ERROR_SUCCESS {
+            bail!("registre (StartupApproved) : erreur {}", status.0);
         }
-    }
-}
-
-fn check(status: windows::Win32::Foundation::WIN32_ERROR) -> Result<()> {
-    if status != ERROR_SUCCESS {
-        bail!("registre (démarrage avec Windows) : erreur {}", status.0);
+    } else {
+        if link.exists() {
+            std::fs::remove_file(&link)?;
+        }
+        // SAFETY: suppression d'une valeur HKCU ; son absence n'est pas une erreur.
+        let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, APPROVED_KEY, APPROVED_VALUE) };
     }
     Ok(())
 }
 
-/// Commande de démarrage : chemin entre guillemets (les espaces sont courants).
-fn run_command(exe: &str) -> String {
-    format!("\"{exe}\"")
+/// Raccourci `.lnk` via l'API Shell (IShellLinkW + IPersistFile).
+fn create_shortcut(link: &Path, target: &Path) -> Result<()> {
+    // SAFETY: objets COM standard du Shell, créés et utilisés sur ce thread.
+    unsafe {
+        // Déjà initialisé sur ce thread : sans effet.
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let shortcut: IShellLinkW =
+            CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).context("ShellLink")?;
+        shortcut.SetPath(&HSTRING::from(target.as_os_str()))?;
+        if let Some(dir) = target.parent() {
+            shortcut.SetWorkingDirectory(&HSTRING::from(dir.as_os_str()))?;
+        }
+        shortcut
+            .cast::<IPersistFile>()?
+            .Save(&HSTRING::from(link.as_os_str()), true)
+            .context("enregistrement du raccourci")?;
+    }
+    Ok(())
 }
 
 /// Icône de l'exe, à la taille des petites icônes (suit le DPI).
@@ -316,20 +324,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn startup_approval_follows_task_manager_state() {
-        assert!(is_approved(Some(&APPROVED_ENABLED)));
-        assert!(is_approved(Some(&[6, 0, 0, 0])));
-        assert!(!is_approved(Some(&[3, 0, 0, 0])));
-        // Absente : Windows ne lance pas l'entrée.
-        assert!(!is_approved(None));
-        assert!(!is_approved(Some(&[])));
-    }
-
-    #[test]
-    fn run_command_quotes_the_path() {
-        assert_eq!(
-            run_command(r"C:\Users\Jo Doe\clipper.exe"),
-            r#""C:\Users\Jo Doe\clipper.exe""#
-        );
+    fn startup_is_disabled_only_when_task_manager_says_so() {
+        assert!(!is_disabled(Some(&APPROVED_ENABLED)));
+        assert!(!is_disabled(Some(&[6, 0, 0, 0])));
+        assert!(is_disabled(Some(&[3, 0, 0, 0])));
+        // Absente (raccourci posé à la main) : Windows le lance.
+        assert!(!is_disabled(None));
+        assert!(!is_disabled(Some(&[])));
     }
 }

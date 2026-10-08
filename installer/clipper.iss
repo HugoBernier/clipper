@@ -41,16 +41,17 @@ Source: "{#Exe}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Clipper"; Filename: "{app}\clipper.exe"
+; Démarrage avec Windows : raccourci du dossier Démarrage (même code que la case du
+; menu de l'icône). Retiré automatiquement à la désinstallation.
+Name: "{userstartup}\Clipper"; Filename: "{app}\clipper.exe"; Tasks: startup
 
 [Registry]
-; Même valeur que la case « Démarrer avec Windows » du menu de l'icône.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Clipper"; ValueData: """{app}\clipper.exe"""; Tasks: startup
-; Windows ne lance une entrée Run que si elle est approuvée (Gestionnaire des tâches >
-; Applications de démarrage) : 02 = activée.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: binary; ValueName: "Clipper"; ValueData: "02 00 00 00 00 00 00 00 00 00 00 00"; Tasks: startup
-; Retirées à la désinstallation même si activées depuis le menu de l'icône.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Clipper"; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: none; ValueName: "Clipper"; Flags: uninsdeletevalue
+; État « activé » dans Gestionnaire des tâches > Applications de démarrage.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder"; ValueType: binary; ValueName: "Clipper.lnk"; ValueData: "02 00 00 00 00 00 00 00 00 00 00 00"; Tasks: startup
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder"; ValueType: none; ValueName: "Clipper.lnk"; Flags: uninsdeletevalue
+; Anciennes versions : démarrage par la clé Run, remplacée par le dossier Démarrage.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Clipper"; Flags: deletevalue uninsdeletevalue
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: none; ValueName: "Clipper"; Flags: deletevalue uninsdeletevalue
 
 [Run]
 Filename: "{app}\clipper.exe"; Description: "Lancer Clipper"; Flags: nowait postinstall

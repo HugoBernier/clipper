@@ -110,7 +110,7 @@ struct VideoFormat { width, height, fps, bitrate }       // mf.rs, commun encode
 - **Arrêt** : écriture en `.tmp` puis rename, donc un kill est sans danger.
 - **Démarrage auto** : un raccourci dans `shell:startup`.
 - **Config** : le fichier est à côté de l'exe ; s'il manque, on écrit les valeurs par défaut.
-- **Démarrage avec Windows** : valeur `Run` **et** `Explorer\StartupApproved\Run` = `02…` (activé). Sans la seconde, Windows 11 ignore l'entrée sans erreur (constaté au reboot du 2026-10-08, journal `Shell-Core/Operational`, événements 9705-9708). La case du menu n'est cochée que si les deux autorisent le lancement.
+- **Démarrage avec Windows** : raccourci `Clipper.lnk` dans le dossier Démarrage (`shell:startup`) + `Explorer\StartupApproved\StartupFolder\Clipper.lnk` = `02…`. Méthode documentée par Microsoft pour les applications de bureau, comme Telegram et Ollama ; validée au redémarrage le 2026-10-08. La clé `Run` (méthode d'Electron) aurait aussi convenu : ses échecs apparents venaient de l'environnement de test (voir `CLAUDE.md`, « Tester comme un vrai utilisateur »), pas de Windows. Une seule instance à la fois (mutex nommé `Local\Clipper`).
 - **Clips** : `output_dir` est relatif au dossier Vidéos de Windows (`SHGetKnownFolderPath`, suit un dossier déplacé vers OneDrive) ; défaut `Vidéos\Clipper`.
 - **Changement de résolution de la source** : le pool WGC est recréé à la nouvelle taille et le VideoProcessor aussi ; la sortie garde sa taille, l'image est centrée sans déformation (bandes noires), donc l'encodeur n'est jamais réinitialisé.
 - **Outillage** : `clippy -D warnings`, `rustfmt`, `lto = true`, `panic = "abort"`.

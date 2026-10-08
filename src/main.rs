@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use log::{error, info, warn};
+use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{CreateMutexW, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey,
 };
@@ -38,6 +39,11 @@ const QUIT_WAIT: Duration = Duration::from_secs(10);
 const CATCH_UP: Duration = Duration::from_secs(2);
 
 fn main() -> Result<()> {
+    if already_running() {
+        // Lancé deux fois (tâche de démarrage + menu Démarrer) : on laisse la première
+        // instance tranquille, sans toucher à son log.
+        return Ok(());
+    }
     init_log()?;
     // panic = "abort" en release : le hook est le seul endroit où la consigner.
     std::panic::set_hook(Box::new(|info| {
@@ -82,6 +88,21 @@ fn init_log() -> Result<()> {
     }
     simplelog::CombinedLogger::init(loggers)?;
     Ok(())
+}
+
+/// Instance unique par session (mutex nommé, gardé jusqu'à la fin du processus). La
+/// build debug a son propre nom pour tourner à côté de la version installée.
+fn already_running() -> bool {
+    let name = if cfg!(debug_assertions) {
+        windows::core::w!(r"Local\ClipperDebug")
+    } else {
+        windows::core::w!(r"Local\Clipper")
+    };
+    // SAFETY: création d'un mutex nommé ; le handle est volontairement gardé ouvert.
+    unsafe {
+        let created = CreateMutexW(None, false, name);
+        created.is_ok() && GetLastError() == ERROR_ALREADY_EXISTS
+    }
 }
 
 /// Seul retour sans interface : un son de succès, un son d'erreur.

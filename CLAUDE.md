@@ -43,9 +43,16 @@ Mesure de synchro A/V : lancer `tools/sync_stimulus.ps1` pendant que Clipper tou
 - Construire : `cargo build --release`, puis `"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\clipper.iss` → `target\installer\ClipperSetup-<version>.exe`. La version vient de `Cargo.toml` (via les infos de version de l'exe).
 - Installer ou mettre à jour : lancer le setup (il ferme le Clipper en cours). Silencieux : `/VERYSILENT /SUPPRESSMSGBOXES /TASKS=startup`. Ne pas lancer le setup avec `Start-Process -Wait` : il attend aussi Clipper, lancé en fin d'installation.
 - Installé par utilisateur dans `%LOCALAPPDATA%\Programs\Clipper` (exe + `clipper.toml`), désinstallable depuis « Applications installées ».
-- Démarrage auto : valeur `Clipper` de `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (case du setup ou du menu de l'icône).
+- Démarrage auto : raccourci `Clipper.lnk` dans `shell:startup` + approbation `StartupApproved\StartupFolder` (case du setup ou du menu de l'icône). Pas la clé `Run` : voir `docs/architecture.md`.
 - Log : `%LOCALAPPDATA%\clipper\clipper.log` (`clipper-debug.log` pour une build debug). Clips : `Vidéos\Clipper`.
 - Icône : maquette `assets/clipper.svg` ; après modification, régénérer `assets/clipper.ico` : `magick -background none -density 384 assets/clipper.svg -define icon:auto-resize=256,64,48,40,32,24,20,16 assets/clipper.ico`.
+
+## Tester comme un vrai utilisateur
+
+Claude Code tourne dans l'application Claude, empaquetée **MSIX** : tout processus qu'il lance (PowerShell, l'installeur, Clipper) voit et écrit une copie **virtualisée** de `HKCU` et d'`AppData` (`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\…`). L'Explorateur, le Gestionnaire des tâches et un Clipper lancé normalement voient, eux, les vraies valeurs. Conséquences constatées le 2026-10-08 : une valeur `Run` écrite par Claude Code n'existe pas pour Windows, et le log lu par Claude Code peut être une copie figée.
+
+- Pour lire l'état réel (registre, log), passer par un script lancé avec `explorer.exe <fichier.bat>` qui écrit son résultat **hors d'AppData** (ex. `C:\Users\<nom>\…`).
+- Démarrage avec Windows, installation, menu de l'icône : la validation finale se fait par l'utilisateur (setup lancé par double-clic, redémarrage).
 
 ## Avant de dire « fini »
 
