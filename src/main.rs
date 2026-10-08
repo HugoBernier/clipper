@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod audio;
 mod config;
 mod mf;
@@ -12,11 +14,14 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use log::{error, info, warn};
+use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey,
 };
-use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetMessageW, MB_ICONHAND, MB_OK, MESSAGEBOX_STYLE, MSG, WM_HOTKEY,
+};
 
 use crate::config::{Config, parse_hotkey};
 use crate::mf::{AudioFormat, SEC, VideoFormat};
@@ -28,18 +33,51 @@ const AUDIO_BPS: u32 = 160_000;
 const CATCH_UP: Duration = Duration::from_secs(2);
 
 fn main() -> Result<()> {
-    // CLIPPER_DEBUG=1 : logs détaillés (diagnostic).
+    init_log()?;
+    // panic = "abort" en release : le hook est le seul endroit où la consigner.
+    std::panic::set_hook(Box::new(|info| {
+        error!("panic : {info}");
+        beep(false);
+    }));
+    if let Err(e) = run() {
+        error!("{e:#}");
+        beep(false);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Log dans `%LOCALAPPDATA%\clipper\clipper.log`, recréé à chaque démarrage (pas de
+/// console en release). En debug, aussi sur la sortie d'erreur.
+/// `CLIPPER_DEBUG=1` : logs détaillés (diagnostic).
+fn init_log() -> Result<()> {
+    let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA absent")?)
+        .join("clipper");
+    std::fs::create_dir_all(&dir)?;
+    let file = std::fs::File::create(dir.join("clipper.log"))?;
     let level = if std::env::var_os("CLIPPER_DEBUG").is_some() {
         log::LevelFilter::Debug
     } else {
         log::LevelFilter::Info
     };
-    simplelog::SimpleLogger::init(level, simplelog::Config::default())?;
-    if let Err(e) = run() {
-        error!("{e:#}");
-        return Err(e);
+    let mut config = simplelog::ConfigBuilder::new();
+    // Appelé avant tout autre thread ; sans effet de bord s'il échoue (reste en UTC).
+    let _ = config.set_time_offset_to_local();
+    let config = config.build();
+    let mut loggers: Vec<Box<dyn simplelog::SharedLogger>> =
+        vec![simplelog::WriteLogger::new(level, config.clone(), file)];
+    if cfg!(debug_assertions) {
+        loggers.push(simplelog::SimpleLogger::new(level, config));
     }
+    simplelog::CombinedLogger::init(loggers)?;
     Ok(())
+}
+
+/// Seul retour sans interface : un son de succès, un son d'erreur.
+fn beep(ok: bool) {
+    let sound: MESSAGEBOX_STYLE = if ok { MB_OK } else { MB_ICONHAND };
+    // SAFETY: MessageBeep n'a pas de précondition.
+    let _ = unsafe { MessageBeep(sound) };
 }
 
 fn run() -> Result<()> {
@@ -49,7 +87,7 @@ fn run() -> Result<()> {
     let hotkey = parse_hotkey(&config.hotkey)?;
     let bitrate = config.video_bitrate(AUDIO_BPS)?;
     let clip = i64::from(config.clip_seconds) * SEC;
-    let out_dir = exe_dir.join(&config.output_dir);
+    let out_dir = save::videos_dir()?.join(&config.output_dir);
 
     // + 1 GOP : le clip démarre à la keyframe qui précède le début voulu.
     let ring = Arc::new(Mutex::new(Ring::new(clip + SEC)));
@@ -101,8 +139,14 @@ fn run() -> Result<()> {
             (ring.clone(), saving.clone(), out_dir.clone(), audio.clone());
         std::thread::spawn(move || {
             match save_clip(&ring, pressed, clip, &video, audio.as_ref(), &out_dir) {
-                Ok(path) => info!("clip sauvegardé : {}", path.display()),
-                Err(e) => error!("échec de la sauvegarde : {e:#}"),
+                Ok(path) => {
+                    info!("clip sauvegardé : {}", path.display());
+                    beep(true);
+                }
+                Err(e) => {
+                    error!("échec de la sauvegarde : {e:#}");
+                    beep(false);
+                }
             }
             saving.store(false, Ordering::SeqCst);
         });

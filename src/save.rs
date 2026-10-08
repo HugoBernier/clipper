@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use windows::Win32::Media::MediaFoundation::*;
+use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::SystemInformation::GetLocalTime;
+use windows::Win32::UI::Shell::{FOLDERID_Videos, KF_FLAG_DEFAULT, SHGetKnownFolderPath};
 use windows::core::HSTRING;
 
 use crate::audio;
@@ -33,6 +35,18 @@ pub fn save(
     // Écrire puis renommer : un kill en cours de route ne laisse jamais un .mp4 cassé.
     std::fs::rename(&tmp, &path)?;
     Ok(path)
+}
+
+/// Dossier Vidéos de Windows (suit un dossier déplacé, par ex. vers OneDrive).
+pub fn videos_dir() -> Result<PathBuf> {
+    // SAFETY: chaîne allouée par le shell, copiée puis libérée par CoTaskMemFree.
+    unsafe {
+        let path = SHGetKnownFolderPath(&FOLDERID_Videos, KF_FLAG_DEFAULT, None)
+            .context("dossier Vidéos")?;
+        let result = path.to_string();
+        CoTaskMemFree(Some(path.0 as _));
+        Ok(PathBuf::from(result?))
+    }
 }
 
 fn file_name() -> String {

@@ -98,13 +98,15 @@ struct VideoFormat { width, height, fps, bitrate }       // mf.rs, commun encode
 ## 6. Bonnes pratiques
 
 - **Erreurs** : `anyhow` + `.context()` sur chaque appel COM.
-- **Logs** : `%LOCALAPPDATA%\clipper\clipper.log`, tronqué au démarrage ; `panic::set_hook` écrit les panics dans le log.
+- **Logs** : `%LOCALAPPDATA%\clipper\clipper.log`, recréé à chaque démarrage, en heure locale ; `panic::set_hook` y écrit les panics. En debug, aussi sur la sortie d'erreur. `CLIPPER_DEBUG=1` : chaque paquet audio (ts, retard, placement).
 - **`unsafe`** : seulement dans `mf`, `video`, `audio`, `save` et `RegisterHotKey`. `#![forbid(unsafe_code)]` dans `ring` et `config`, un commentaire `// SAFETY:` par bloc.
 - **Console** : `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`.
 - **Retour utilisateur** : `MessageBeep`, un son pour le succès et un autre pour l'échec.
 - **Arrêt** : écriture en `.tmp` puis rename, donc un kill est sans danger.
 - **Démarrage auto** : un raccourci dans `shell:startup`.
 - **Config** : le fichier est à côté de l'exe ; s'il manque, on écrit les valeurs par défaut.
+- **Clips** : `output_dir` est relatif au dossier Vidéos de Windows (`SHGetKnownFolderPath`, suit un dossier déplacé vers OneDrive) ; défaut `Vidéos\Clipper`.
+- **Changement de résolution de la source** : le pool WGC est recréé à la nouvelle taille et le VideoProcessor aussi ; la sortie garde sa taille, l'image est centrée sans déformation (bandes noires), donc l'encodeur n'est jamais réinitialisé.
 - **Outillage** : `clippy -D warnings`, `rustfmt`, `lto = true`, `panic = "abort"`.
 
 ## 7. Tests

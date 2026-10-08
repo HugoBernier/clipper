@@ -22,7 +22,7 @@ pub struct Config {
     pub target_mb: f64,
     /// Ex. "Alt+F10", "Ctrl+Shift+S".
     pub hotkey: String,
-    /// Relatif au dossier de l'exe, ou absolu.
+    /// Relatif au dossier Vidéos de Windows, ou absolu.
     pub output_dir: PathBuf,
 }
 
@@ -34,7 +34,7 @@ impl Default for Config {
             fps: 60,
             target_mb: 19.0,
             hotkey: "Alt+F10".into(),
-            output_dir: "clips".into(),
+            output_dir: "Clipper".into(),
         }
     }
 }
