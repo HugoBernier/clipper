@@ -28,13 +28,12 @@ Au raccourci, un MP4 des **30 dernières secondes** (image + son du jeu), qui s'
 
 - commande vocale ;
 - upload ;
-- fenêtre, notifications ;
+- notifications Windows ;
 - capture d'une fenêtre ou de plusieurs écrans ;
 - HDR ;
 - HEVC/AV1 ;
 - fallback logiciel ;
 - rotation des logs ;
-- rechargement à chaud de la config ;
 - hotkey « quitter » ;
 - ffmpeg ;
 - plusieurs durées de clip.
@@ -59,9 +58,12 @@ D'ici là, OBS reste l'outil du quotidien.
 | 1 | Ring + hotkey + config, vidéo seule | 1 h stable en mémoire, clip de 30 à 31 s sous la cible. **Code fait le 2026-10-07** : 24 tests, clip de 30,62 s, 15,2 Mo (vidéo seule, cible 19), faststart OK, ~98 Mo de RAM. Test d'endurance : stable sur 39 min (87-93 Mo privés, handles constants, ~0,75 % CPU), interrompu par la fin de session ; la soirée de l'itération 3 couvre la suite. Discord OK. |
 | 2 | Audio + AAC + synchro QPC | Décalage < 1 frame, pas de dérive après un silence. **Mesuré le 2026-10-07** (stimulus flash + bip, instants QPC) : le son est placé à l'instant QPC où Windows le joue, l'image 16 à 32 ms après l'événement à l'écran (≤ ~1 image propre à Clipper). Silences comblés exactement, sans dérive. **Validé en jeu le 2026-10-07** : environ 1 image de retard, invisible. |
 | 3 | Prod : sous-système Windows, log, bips, démarrage auto | Survit à un reboot et à une soirée de Hunt et R6. **Code fait le 2026-10-08** : pas de console, log fichier en heure locale, bips, clips dans Vidéos\Clipper, changement de résolution géré (bandes noires), double appui ignoré (testé), 37 tests. Installé avec démarrage auto le 2026-10-08 ; clips avec son validés par l'utilisateur. **Redémarrage validé le 2026-10-08** (raccourci du dossier Démarrage, visible et activé dans le Gestionnaire des tâches ; case du menu testée). **Reste à faire** : soirée de jeu et cas limites en jeu. |
-| 4 | Micro mixé au son du PC (voir ci-dessous) | Voix audible et synchro (< 1 image) avec le jeu ; micro absent ou débranché → clip quand même, avec le son du PC ; pas de dérive sur 1 h. **Code fait le 2026-10-08** : micro de communication capté (Scarlett Solo, paquets de 10 ms, ~8 ms de latence, aucune correction), mixeur pur (6 tests), clip mixé vidéo/audio alignés, 45 tests. **Reste à faire** : voix + tir en jeu, débrancher/rebrancher le micro, 1 h. |
+| 4 | Micro mixé au son du PC (voir ci-dessous) | Voix audible et synchro (< 1 image) avec le jeu ; micro absent ou débranché → clip quand même, avec le son du PC ; pas de dérive sur 1 h. **Code fait le 2026-10-08** : micro de communication capté (Scarlett Solo, paquets de 10 ms, ~8 ms de latence, aucune correction), mixeur pur (6 tests), clip mixé vidéo/audio alignés, 45 tests. **Reste à faire** : voix + tir en jeu, débrancher/rebrancher le micro, 1 h. **Corrigé le 2026-10-08** : voix seulement à gauche (la Scarlett Solo expose 2 canaux : micro à gauche, entrée instrument à droite) → micro converti en mono sur les deux canaux, comme le « Downmix to Mono » d'OBS ; la voix perd ~6 dB. |
 | 5 | Icône dans la zone de notification (voir ci-dessous) | Icône visible près de l'horloge ; menu : ouvrir le dossier des clips, « Démarrer avec Windows » (coché selon l'état réel), quitter ; l'icône revient si l'Explorateur redémarre. **Fait le 2026-10-08** : icône, info-bulle, menu testés par l'utilisateur ; aucun bouton dans la barre des tâches ; 48 tests. |
-| 6 | Installeur Windows (voir ci-dessous) | `ClipperSetup.exe` installe sans droits admin, crée l'entrée du menu Démarrer, propose le démarrage avec Windows et lance Clipper ; Clipper apparaît dans « Applications installées » avec son icône ; la désinstallation retire exe, raccourci et clé de démarrage, garde les clips ; réinstaller par-dessus une version qui tourne fonctionne. **Fait le 2026-10-08** : setup de 2,6 Mo ; testé en silencieux : installation par-dessus le Clipper en cours (fermé puis relancé), entrée « Clipper 0.1.0 » avec icône, menu Démarrer, clé `Run` ; désinstallation propre, clips conservés. Icône et version compilées dans l'exe (maquette SVG). **Reste à faire** : l'assistant graphique vu par l'utilisateur, le design définitif de l'icône. |
+| 6 | Installeur Windows (voir ci-dessous) | `ClipperSetup.exe` installe sans droits admin, crée l'entrée du menu Démarrer, propose le démarrage avec Windows et lance Clipper ; Clipper apparaît dans « Applications installées » avec son icône ; la désinstallation retire exe, raccourcis et démarrage auto, garde les clips ; réinstaller par-dessus une version qui tourne fonctionne. **Fait le 2026-10-08** : setup de 2,6 Mo ; testé en silencieux : installation par-dessus le Clipper en cours (fermé puis relancé), entrée « Clipper 0.1.0 » avec icône, menu Démarrer, démarrage auto ; désinstallation propre, clips conservés. Icône et version compilées dans l'exe (maquette SVG). **Reste à faire** : l'assistant graphique vu par l'utilisateur, le design définitif de l'icône. |
+| 7 | Processus de release (voir ci-dessous) | Conventional Commits appliqués, `CHANGELOG.md` à jour, version SemVer dans `Cargo.toml`, tag `vX.Y.Z` ; une release GitHub contient le setup, construit par la CI |
+| 8 | Qualité réglable facilement (voir ci-dessous) | Choisir un préréglage de qualité depuis le menu de l'icône, appliqué sans relancer Clipper ; le clip suivant respecte la résolution, les fps et la taille cible du préréglage |
+| 9 | Interface graphique (voir ci-dessous) | Une fenêtre claire, ouverte depuis l'icône : réglages (qualité, micro, raccourci, dossier, démarrage) et derniers clips à partager ; design fourni par Claude Design |
 
 ## Itération 4 : micro
 
@@ -91,9 +93,9 @@ D'ici là, OBS reste l'outil du quotidien.
 **Pourquoi** : sans fenêtre ni icône, Clipper est invisible et ne se quitte que par le Gestionnaire des tâches. Un outil Windows d'arrière-plan vit près de l'horloge (comme Discord, Medal, ShadowPlay).
 
 **Ce qui est dans l'itération**
-- Icône (point rouge « enregistrement », dessinée par le programme) et info-bulle « Clipper — Alt+F10 ».
+- Icône de l'application (ressource de l'exe, itération 6) et info-bulle « Clipper — Alt+F10 ».
 - Menu au clic droit : **Ouvrir le dossier des clips**, **Démarrer avec Windows** (case à cocher), **Quitter**.
-- Démarrage avec Windows par la clé de registre `HKCU\…\Run` (comme Discord, Steam) ; l'ancien raccourci du dossier Démarrage est supprimé à la mise à jour, pour éviter un double lancement.
+- Démarrage avec Windows par un raccourci dans le dossier Démarrage + son approbation `StartupApproved\StartupFolder` (méthode documentée par Microsoft ; voir `docs/architecture.md`).
 - Quitter attend la fin d'une sauvegarde en cours.
 - Une fenêtre cachée reçoit les messages de l'icône ; elle n'apparaît ni à l'écran ni dans la barre des tâches.
 
@@ -106,10 +108,48 @@ D'ici là, OBS reste l'outil du quotidien.
 **Ce qui est dans l'itération**
 - **Inno Setup** (gratuit, y compris en commercial) : script `installer/clipper.iss`, sortie `target/installer/ClipperSetup-<version>.exe`.
 - Installation **par utilisateur**, sans droits admin, dans `%LOCALAPPDATA%\Programs\Clipper` (comme Discord, VS Code) : la config reste modifiable à côté de l'exe.
-- Menu Démarrer, case « Démarrer avec Windows » (même valeur `Run` que le menu de l'icône), lancement en fin d'installation, désinstalleur dans « Applications installées ».
+- Menu Démarrer, case « Démarrer avec Windows » (même raccourci du dossier Démarrage que le menu de l'icône), lancement en fin d'installation, désinstalleur dans « Applications installées ».
 - Une mise à jour ferme le Clipper en cours avant de remplacer l'exe.
 - **Icône de l'application** : maquette SVG (`assets/clipper.svg`, à remplacer par un design définitif), convertie en `.ico` multi-tailles et compilée dans l'exe (crate de build `embed-resource`). L'icône de notification utilise la même ressource. Informations de version (nom, version) dans l'exe.
 
 **Hors itération** : signature de code (certificat payant ; sans lui, SmartScreen avertit au premier lancement du setup), mise à jour automatique, installation pour tous les utilisateurs.
+
+## Itération 7 : processus de release
+
+**Pourquoi** : qualité de travail. Historique lisible, versions qui ont un sens, releases reproductibles.
+
+**Ce qui est dans l'itération**
+- **Conventional Commits** (déjà la règle dans `CLAUDE.md` à partir du 2026-10-08) : `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`, portée optionnelle (`audio`, `video`, `tray`, `installer`…), `!` pour un changement cassant.
+- **SemVer** : la version de `Cargo.toml` est la seule source (elle remonte déjà dans l'exe et le setup). Première release : `0.2.0` (0.x tant que le format de config peut changer).
+- **`CHANGELOG.md`** au format *Keep a Changelog*, dérivé des commits conventionnels.
+- **Tag `vX.Y.Z`** → la CI (GitHub Actions, runner Windows) compile, lance les tests, construit le setup Inno Setup et publie la release GitHub avec `ClipperSetup-X.Y.Z.exe` et les notes du changelog.
+
+**Questions ouvertes**
+1. Nom du dépôt GitHub, public ou privé ? (création et premier push : action à valider explicitement)
+2. Changelog écrit à la main à chaque release, ou généré depuis les commits (outil comme `git-cliff`, à valider) ?
+
+## Itération 8 : qualité réglable facilement
+
+**Pourquoi** : la qualité (résolution, fps, taille cible) doit se changer sans éditer `clipper.toml` ni relancer Clipper.
+
+**Ce qui est dans l'itération**
+- **Préréglages nommés** dans la config (`quality = "…"`), chacun = hauteur, fps, taille cible. Proposition : « Discord gratuit » (720p60, 19 Mo), « Discord gratuit net » (1080p30, 19 Mo), « Nitro » (1440p60, 48 Mo). Les champs détaillés restent possibles pour un réglage sur mesure.
+- **Sous-menu « Qualité »** dans le menu de l'icône, avec le préréglage actif coché.
+- **Application à chaud** : changer de qualité redémarre seulement le pipeline vidéo (le buffer repart de zéro) ; la config est réécrite.
+
+**Question ouverte** : les préréglages et leurs valeurs ci-dessus conviennent-ils ? (à valider sur de vrais clips de jeu)
+
+## Itération 9 : interface graphique
+
+**Pourquoi** : un vrai logiciel, réglable et utilisable sans fichier de config ; partager un clip en un geste.
+
+**Ce qui est dans l'itération** (contenu exact selon la maquette Claude Design)
+- Fenêtre ouverte depuis l'icône (clic gauche ou menu) : réglages (qualité, micro et son volume, raccourci, dossier des clips, démarrage avec Windows).
+- Liste des derniers clips : lire, ouvrir le dossier, partager (copier le fichier pour le coller dans Discord, glisser-déposer).
+- Les réglages s'appliquent sans relancer Clipper (s'appuie sur l'itération 8).
+
+**Questions ouvertes**
+1. Technologie : la maquette Claude Design sera en HTML/CSS ; l'afficher dans une WebView2 (le moteur Edge intégré à Windows, crate à valider) permet de la reprendre presque telle quelle. Une interface native Win32 obligerait à la redessiner. À trancher quand la maquette existe.
+2. Que veut dire « partager » exactement : copier le fichier, copier un lien (demanderait un upload, hors scope), glisser vers Discord ?
 
 Sortie de secours : si le spike A dépasse 3 soirées, on passe l'encodage et le mux à ffmpeg, et on garde WGC et WASAPI en natif.
