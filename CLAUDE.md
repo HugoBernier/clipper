@@ -50,7 +50,7 @@ Mesure de synchro A/V : lancer `tools/sync_stimulus.ps1` pendant que Clipper tou
 ## Commits et versions
 
 - **Conventional Commits** : `type(portée): description` en français, à l'impératif, sans majuscule ni point final. Types : `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`. Portées usuelles : `video`, `audio`, `mix`, `ring`, `save`, `tray`, `config`, `installer`. Changement cassant : `!` après le type et un pied `BREAKING CHANGE:`.
-- **SemVer** : la version de `Cargo.toml` est la seule source ; elle remonte dans l'exe et le setup. Processus de release : `docs/scope.md`, itération 7.
+- **SemVer** : la version de `Cargo.toml` est la seule source ; elle remonte dans l'exe et le setup. Ne pas la modifier à la main : release-please la fixe dans sa *Release PR* (avec `CHANGELOG.md`), et fusionner cette PR publie la release, setup compris (`.github/workflows/release.yml`).
 
 ## Tester comme un vrai utilisateur
 
