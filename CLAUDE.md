@@ -19,7 +19,7 @@ En cas de doute, le moins de code gagne.
 - **Toolchain** : Rust stable, edition 2024, cible `x86_64-pc-windows-msvc`.
 - **Crates autorisées** : `windows`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog`. Toute autre crate se demande d'abord.
 - **Erreurs** : `anyhow::Result` partout, et `.context("…")` sur chaque appel COM ou Win32. Pas de `unwrap()` hors tests.
-- **`unsafe`** : seulement dans `mf.rs`, `video.rs`, `audio.rs`, `save.rs` et `main.rs` pour la boucle de messages et le bip (`RegisterHotKey`, `GetMessageW`, `MessageBeep`). Chaque bloc porte un commentaire `// SAFETY:`. `ring.rs` et `config.rs` ont `#![forbid(unsafe_code)]`.
+- **`unsafe`** : seulement dans `mf.rs`, `video.rs`, `audio.rs`, `save.rs` et `main.rs` pour la boucle de messages et le bip (`RegisterHotKey`, `GetMessageW`, `MessageBeep`). Chaque bloc porte un commentaire `// SAFETY:`. `ring.rs`, `config.rs` et `mix.rs` ont `#![forbid(unsafe_code)]`.
 - **Pas de console en release** : `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`.
 - **Anti-cheat** : aucune injection, aucun `SetWindowsHookEx`. On passe uniquement par WGC et `RegisterHotKey`.
 - **Horloge** : tous les timestamps sont en unités de 100 ns, dérivés de QPC.
@@ -40,7 +40,7 @@ Spikes : `cargo run --example <nom>` (fichiers dans `examples/`, jetables, ils n
 
 - Exe : `%LOCALAPPDATA%\Programs\Clipper\clipper.exe`, avec son `clipper.toml` à côté.
 - Démarrage auto : raccourci `Clipper.lnk` dans `shell:startup` (le supprimer pour désactiver).
-- Log : `%LOCALAPPDATA%\clipper\clipper.log`. Clips : `Vidéos\Clipper`.
+- Log : `%LOCALAPPDATA%\clipper\clipper.log` (`clipper-debug.log` pour une build debug). Clips : `Vidéos\Clipper`.
 - Mettre à jour : `cargo build --release`, arrêter le process `clipper`, copier `target\release\clipper.exe` par-dessus, relancer via le raccourci.
 
 ## Avant de dire « fini »

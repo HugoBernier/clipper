@@ -31,7 +31,8 @@ src/
   ring.rs    # Packet, Ring, éviction, snapshot coupé à la keyframe (pur, TDD)
   mf.rs      # helpers MF partagés : MFStartup, media types, MFT async
   video.rs   # WGC → VideoProcessor (scale + NV12, GPU) → MFT H.264
-  audio.rs   # loopback WASAPI → bouchage des silences, f32→i16 → MFT AAC
+  audio.rs   # son du PC (loopback) + micro WASAPI → timelines → mixeur → MFT AAC
+  mix.rs     # mixage pur de sources PCM alignées sur la même origine (TDD)
   save.rs    # snapshot → SinkWriter passthrough → .tmp → faststart (pur) → rename
 ```
 

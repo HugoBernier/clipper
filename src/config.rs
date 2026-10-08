@@ -24,6 +24,8 @@ pub struct Config {
     pub hotkey: String,
     /// Relatif au dossier Vidéos de Windows, ou absolu.
     pub output_dir: PathBuf,
+    /// Mixer le micro de communication (celui de Discord) au son du PC.
+    pub microphone: bool,
 }
 
 impl Default for Config {
@@ -35,6 +37,7 @@ impl Default for Config {
             target_mb: 19.0,
             hotkey: "Alt+F10".into(),
             output_dir: "Clipper".into(),
+            microphone: true,
         }
     }
 }
@@ -184,6 +187,13 @@ mod tests {
         let config: Config = toml::from_str("clip_seconds = 20").unwrap();
         assert_eq!(config.clip_seconds, 20);
         assert_eq!(config.fps, 60);
+        assert!(config.microphone);
+    }
+
+    #[test]
+    fn microphone_can_be_disabled() {
+        let config: Config = toml::from_str("microphone = false").unwrap();
+        assert!(!config.microphone);
     }
 
     #[test]
