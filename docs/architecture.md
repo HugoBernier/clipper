@@ -33,6 +33,7 @@ src/
   video.rs   # WGC → VideoProcessor (scale + NV12, GPU) → MFT H.264
   audio.rs   # son du PC (loopback) + micro WASAPI → timelines → mixeur → MFT AAC
   mix.rs     # mixage pur de sources PCM alignées sur la même origine (TDD)
+  tray.rs    # icône de notification, menu, démarrage avec Windows (registre Run)
   save.rs    # snapshot → SinkWriter passthrough → .tmp → faststart (pur) → rename
 ```
 
