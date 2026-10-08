@@ -1,0 +1,50 @@
+name: release
+
+# À chaque push sur main, release-please tient à jour une « Release PR » (version
+# SemVer dans Cargo.toml + CHANGELOG.md, depuis les Conventional Commits). La fusionner
+# crée le tag vX.Y.Z et la release GitHub ; le job `setup` y attache l'installeur.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  setup:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+      - run: cargo build --release --locked
+      - name: Installeur (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --yes --no-progress }
+          & $iscc /Q installer\clipper.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Joindre l'installeur à la release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = Get-ChildItem target\installer\ClipperSetup-*.exe | Select-Object -First 1
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" $setup.FullName --clobber
