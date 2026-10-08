@@ -36,6 +36,13 @@ cargo fmt
 
 Spikes : `cargo run --example <nom>` (fichiers dans `examples/`, jetables, ils ne sont pas réutilisés par `src/`).
 
+## Version installée
+
+- Exe : `%LOCALAPPDATA%\Programs\Clipper\clipper.exe`, avec son `clipper.toml` à côté.
+- Démarrage auto : raccourci `Clipper.lnk` dans `shell:startup` (le supprimer pour désactiver).
+- Log : `%LOCALAPPDATA%\clipper\clipper.log`. Clips : `Vidéos\Clipper`.
+- Mettre à jour : `cargo build --release`, arrêter le process `clipper`, copier `targetelease\clipper.exe` par-dessus, relancer via le raccourci.
+
 ## Avant de dire « fini »
 
 Lance `cargo fmt`, `cargo clippy -- -D warnings` et `cargo test`, qui doivent tous passer. Vérifie aussi le critère « Fini quand » de l'itération dans `docs/scope.md`. Ce qui n'a pas pu être testé à la main (en jeu, dans Discord) se signale explicitement.
