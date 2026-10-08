@@ -19,6 +19,7 @@ use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_BINARY, RRF_RT_REG_BINARY, RegDeleteKeyValueW, RegGetValueW,
     RegSetKeyValueW,
 };
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
     FOLDERID_Startup, IShellLinkW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
     NOTIFYICONDATAW, Shell_NotifyIconW, ShellLink,
@@ -26,10 +27,15 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, Interface, PCWSTR, w};
 
+use crate::config::PRESETS;
 use crate::save;
 
 /// Message envoyé par l'icône à la fenêtre cachée.
 const WM_TRAY: u32 = WM_APP + 1;
+/// Envoyé au thread principal quand un préréglage de qualité est choisi (wParam = index).
+pub const WM_QUALITY: u32 = WM_APP + 2;
+/// Identifiants de menu des préréglages : `ID_QUALITY + index`.
+const ID_QUALITY: usize = 100;
 const ID_OPEN: usize = 1;
 const ID_STARTUP: usize = 2;
 const ID_QUIT: usize = 3;
@@ -50,6 +56,8 @@ const ICON_RESOURCE: u16 = 1;
 static CLIPS_DIR: OnceLock<PathBuf> = OnceLock::new();
 static TOOLTIP: OnceLock<String> = OnceLock::new();
 static ICON: AtomicUsize = AtomicUsize::new(0);
+/// Préréglage coché dans le menu ; `usize::MAX` : config personnalisée.
+static PRESET: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Diffusé par l'Explorateur quand il redémarre : il faut remettre l'icône.
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
@@ -124,6 +132,10 @@ impl Drop for Tray {
     }
 }
 
+pub fn set_preset(preset: Option<usize>) {
+    PRESET.store(preset.unwrap_or(usize::MAX), Ordering::Relaxed);
+}
+
 fn add_icon(hwnd: HWND) -> Result<()> {
     let mut data = NOTIFYICONDATAW {
         cbSize: size_of::<NOTIFYICONDATAW>() as u32,
@@ -181,6 +193,23 @@ fn show_menu(hwnd: HWND) -> Result<()> {
     let choice = unsafe {
         let menu = CreatePopupMenu()?;
         AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Ouvrir le dossier des clips"))?;
+        let quality = CreatePopupMenu()?;
+        let current = PRESET.load(Ordering::Relaxed);
+        for (i, preset) in PRESETS.iter().enumerate() {
+            let check = if i == current {
+                MF_CHECKED
+            } else {
+                MF_UNCHECKED
+            };
+            AppendMenuW(
+                quality,
+                MF_STRING | check,
+                ID_QUALITY + i,
+                &HSTRING::from(preset.name),
+            )?;
+        }
+        // Le sous-menu est détruit avec le menu parent.
+        AppendMenuW(menu, MF_POPUP, quality.0 as usize, w!("Qualité"))?;
         let check = if startup { MF_CHECKED } else { MF_UNCHECKED };
         AppendMenuW(
             menu,
@@ -207,6 +236,21 @@ fn show_menu(hwnd: HWND) -> Result<()> {
         choice.0 as usize
     };
     match choice {
+        id if (ID_QUALITY..ID_QUALITY + PRESETS.len()).contains(&id) => {
+            let preset = id - ID_QUALITY;
+            if preset != PRESET.load(Ordering::Relaxed) {
+                // Le pipeline vidéo appartient au thread principal : on lui délègue.
+                // SAFETY: message posté au thread courant (celui de la boucle principale).
+                unsafe {
+                    PostThreadMessageW(
+                        GetCurrentThreadId(),
+                        WM_QUALITY,
+                        WPARAM(preset),
+                        LPARAM(0),
+                    )?;
+                }
+            }
+        }
         ID_OPEN => {
             let dir = CLIPS_DIR.get().context("dossier des clips inconnu")?;
             std::fs::create_dir_all(dir)?;

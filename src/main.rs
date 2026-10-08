@@ -27,9 +27,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_HOTKEY,
 };
 
-use crate::config::{Config, parse_hotkey};
+use crate::config::{Config, PRESETS, parse_hotkey};
 use crate::mf::{AudioFormat, SEC, VideoFormat};
 use crate::ring::Ring;
+use crate::video::Video;
 
 /// AAC 160 kb/s (débits possibles de l'encodeur Windows : 96, 128, 160, 192).
 const AUDIO_BPS: u32 = 160_000;
@@ -115,7 +116,8 @@ fn beep(ok: bool) {
 fn run() -> Result<()> {
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().context("dossier de l'exe")?;
-    let config = Config::load_or_create(&exe_dir.join("clipper.toml"))?;
+    let config_path = exe_dir.join("clipper.toml");
+    let mut config = Config::load_or_create(&config_path)?;
     let hotkey = parse_hotkey(&config.hotkey)?;
     let bitrate = config.video_bitrate(AUDIO_BPS)?;
     let clip = i64::from(config.clip_seconds) * SEC;
@@ -125,7 +127,7 @@ fn run() -> Result<()> {
     let ring = Arc::new(Mutex::new(Ring::new(clip + SEC)));
     // SAFETY: GetCurrentThreadId n'a pas de précondition.
     let main_thread = unsafe { GetCurrentThreadId() };
-    let video = video::spawn(
+    let mut video = video::spawn(
         config.height,
         config.fps,
         bitrate,
@@ -163,11 +165,22 @@ fn run() -> Result<()> {
     )
     .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
     .ok();
+    tray::set_preset(config.preset());
 
     let saving = Arc::new(AtomicBool::new(false));
     let mut msg = MSG::default();
     // SAFETY: boucle de messages standard du thread courant.
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
+        if msg.message == tray::WM_QUALITY {
+            let preset = msg.wParam.0;
+            let mut ring = ring.clone();
+            if let Err(e) = change_quality(preset, &mut config, &config_path, &mut video, &mut ring)
+            {
+                error!("changement de qualité : {e:#}");
+                beep(false);
+            }
+            continue;
+        }
         if msg.message != WM_HOTKEY {
             // Messages de la fenêtre cachée de l'icône.
             // SAFETY: message reçu par GetMessageW, transmis tel quel.
@@ -183,10 +196,15 @@ fn run() -> Result<()> {
             warn!("sauvegarde déjà en cours, appui ignoré");
             continue;
         }
-        let (ring, saving, out_dir, audio) =
-            (ring.clone(), saving.clone(), out_dir.clone(), audio.clone());
+        let (ring, saving, out_dir, audio, format) = (
+            ring.clone(),
+            saving.clone(),
+            out_dir.clone(),
+            audio.clone(),
+            video.format,
+        );
         std::thread::spawn(move || {
-            match save_clip(&ring, pressed, clip, &video, audio.as_ref(), &out_dir) {
+            match save_clip(&ring, pressed, clip, &format, audio.as_ref(), &out_dir) {
                 Ok(path) => {
                     info!("clip sauvegardé : {}", path.display());
                     beep(true);
@@ -209,6 +227,36 @@ fn run() -> Result<()> {
         std::thread::sleep(Duration::from_millis(50));
     }
     info!("arrêt demandé");
+    Ok(())
+}
+
+/// Applique un préréglage de qualité : config réécrite, pipeline vidéo redémarré au
+/// nouveau format, buffer vidé (ses images n'ont plus le format de l'encodeur).
+/// L'audio continue sans interruption.
+fn change_quality(
+    preset: usize,
+    config: &mut Config,
+    config_path: &Path,
+    video: &mut Video,
+    ring: &mut Arc<Mutex<Ring>>,
+) -> Result<()> {
+    let chosen = PRESETS.get(preset).context("préréglage inconnu")?;
+    config.apply(chosen);
+    config.save(config_path)?;
+    let bitrate = config.video_bitrate(AUDIO_BPS)?;
+    video.stop();
+    ring.lock().map_err(|_| anyhow!("ring empoisonné"))?.clear();
+    // SAFETY: GetCurrentThreadId n'a pas de précondition.
+    let main_thread = unsafe { GetCurrentThreadId() };
+    *video = video::spawn(
+        config.height,
+        config.fps,
+        bitrate,
+        ring.clone(),
+        main_thread,
+    )?;
+    tray::set_preset(config.preset());
+    info!("qualité : {}", chosen.name);
     Ok(())
 }
 

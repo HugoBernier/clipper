@@ -2,8 +2,10 @@
 //! → horloge CFR → MFT H.264 matériel (async) → `Ring`.
 
 use std::mem::ManuallyDrop;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -49,7 +51,24 @@ impl<T> SendBox<T> {
 /// Dernière image convertie, partagée entre la capture et l'horloge d'encodage.
 type Latest = Arc<Mutex<SendBox<Option<ID3D11Texture2D>>>>;
 
-/// Démarre la capture et l'encodage dans un thread dédié. Renvoie le format une fois
+/// Pipeline vidéo en cours : son format, et de quoi l'arrêter (changement de qualité).
+pub struct Video {
+    pub format: VideoFormat,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl Video {
+    /// Arrête capture et encodage, et attend la fin du thread.
+    pub fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Démarre la capture et l'encodage dans un thread dédié. Renvoie une fois
 /// l'initialisation réussie. Si l'encodage échoue plus tard, le thread `main_thread`
 /// reçoit WM_QUIT.
 pub fn spawn(
@@ -58,12 +77,14 @@ pub fn spawn(
     bitrate: u32,
     ring: Arc<Mutex<Ring>>,
     main_thread: u32,
-) -> Result<VideoFormat> {
+) -> Result<Video> {
     let (ready_tx, ready_rx) = channel();
-    std::thread::Builder::new()
+    let stop = Arc::new(AtomicBool::new(false));
+    let thread_stop = stop.clone();
+    let thread = std::thread::Builder::new()
         .name("video".into())
         .spawn(move || {
-            if let Err(e) = run(height, fps, bitrate, &ring, &ready_tx) {
+            if let Err(e) = run(height, fps, bitrate, &ring, &thread_stop, &ready_tx) {
                 error!("vidéo arrêtée : {e:#}");
                 let _ = ready_tx.send(Err(anyhow!("{e:#}")));
                 // SAFETY: simple envoi de message au thread principal.
@@ -72,9 +93,14 @@ pub fn spawn(
                 }
             }
         })?;
-    ready_rx
+    let format = ready_rx
         .recv()
-        .context("thread vidéo mort pendant l'init")?
+        .context("thread vidéo mort pendant l'init")??;
+    Ok(Video {
+        format,
+        stop,
+        thread: Some(thread),
+    })
 }
 
 fn run(
@@ -82,6 +108,7 @@ fn run(
     fps: u32,
     bitrate: u32,
     ring: &Mutex<Ring>,
+    stop: &AtomicBool,
     ready: &Sender<Result<VideoFormat>>,
 ) -> Result<()> {
     mf::startup()?;
@@ -96,7 +123,7 @@ fn run(
         fps,
         bitrate,
     };
-    let (encoder, name) = create_encoder(&device, &format)?;
+    let (encoder, name, activate) = create_encoder(&device, &format)?;
     info!(
         "source {}x{} → {width}x{height} @ {fps} fps, {} kb/s, encodeur {name}",
         src.Width,
@@ -107,7 +134,23 @@ fn run(
     let latest: Latest = Arc::new(Mutex::new(SendBox(None)));
     let _capture = start_capture(&device, &context, &item, &format, latest.clone())?;
     let _ = ready.send(Ok(format));
-    encode_loop(&encoder, &format, &latest, ring)
+    let result = encode_loop(&encoder, &format, &latest, ring, stop);
+    shutdown_encoder(&encoder, &activate);
+    result
+}
+
+/// Un MFT asynchrone garde des références circulaires (file d'événements, device GPU,
+/// textures en attente) tant qu'on n'appelle pas `IMFShutdown::Shutdown` : sans ça,
+/// chaque changement de qualité fuyait ~240 Mo et ~1 700 handles.
+fn shutdown_encoder(mft: &IMFTransform, activate: &IMFActivate) {
+    // SAFETY: fin de vie documentée d'un MFT asynchrone ; plus aucun appel ensuite.
+    unsafe {
+        let _ = mft.ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
+        if let Ok(shutdown) = mft.cast::<IMFShutdown>() {
+            let _ = shutdown.Shutdown();
+        }
+        let _ = activate.ShutdownObject();
+    }
 }
 
 fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
@@ -137,7 +180,11 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     }
 }
 
-fn create_encoder(device: &ID3D11Device, format: &VideoFormat) -> Result<(IMFTransform, String)> {
+/// Renvoie aussi l'`IMFActivate` qui a créé l'encodeur : il faut l'arrêter à la fin.
+fn create_encoder(
+    device: &ID3D11Device,
+    format: &VideoFormat,
+) -> Result<(IMFTransform, String, IMFActivate)> {
     // SAFETY: API MF documentée ; le tableau d'IMFActivate est libéré par CoTaskMemFree.
     unsafe {
         let input = MFT_REGISTER_TYPE_INFO {
@@ -215,7 +262,7 @@ fn create_encoder(device: &ID3D11Device, format: &VideoFormat) -> Result<(IMFTra
             .context("SetInputType")?;
         mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
         mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-        Ok((mft, friendly))
+        Ok((mft, friendly, activate))
     }
 }
 
@@ -223,10 +270,14 @@ fn create_encoder(device: &ID3D11Device, format: &VideoFormat) -> Result<(IMFTra
 struct Capture {
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
+    frame_arrived: i64,
 }
 
 impl Drop for Capture {
     fn drop(&mut self) {
+        // Le gestionnaire retient le convertisseur, le device et la dernière image :
+        // le désabonner avant de fermer, sinon tout reste en mémoire.
+        let _ = self.pool.RemoveFrameArrived(self.frame_arrived);
         let _ = self.session.Close();
         let _ = self.pool.Close();
     }
@@ -273,7 +324,7 @@ fn start_capture(
         let (device, context, format) =
             (SendBox(device.clone()), SendBox(context.clone()), *format);
         let winrt_device = SendBox(winrt_device);
-        pool.FrameArrived(&TypedEventHandler::new(
+        let frame_arrived = pool.FrameArrived(&TypedEventHandler::new(
             move |pool: Ref<Direct3D11CaptureFramePool>, _: Ref<IInspectable>| {
                 let pool = pool.ok()?;
                 let frame = pool.TryGetNextFrame()?;
@@ -310,7 +361,11 @@ fn start_capture(
             },
         ))?;
         session.StartCapture()?;
-        Ok(Capture { pool, session })
+        Ok(Capture {
+            pool,
+            session,
+            frame_arrived,
+        })
     }
 }
 
@@ -476,6 +531,7 @@ fn encode_loop(
     format: &VideoFormat,
     latest: &Latest,
     ring: &Mutex<Ring>,
+    stop: &AtomicBool,
 ) -> Result<()> {
     let fps = i64::from(format.fps);
     let start = Instant::now();
@@ -488,6 +544,10 @@ fn encode_loop(
             let event = events.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
             let kind = event.GetType()?;
             if kind == METransformNeedInput.0 as u32 {
+                // Vérifié à chaque image (60 fois par seconde) : arrêt quasi immédiat.
+                if stop.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
                 let due = start + Duration::from_nanos((n * 1_000_000_000 / fps) as u64);
                 std::thread::sleep(due.saturating_duration_since(Instant::now()));
                 let texture = wait_first_frame(latest)?;
