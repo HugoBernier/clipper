@@ -17,7 +17,7 @@ En cas de doute, le moins de code gagne.
 ## Règles de code
 
 - **Toolchain** : Rust stable, edition 2024, cible `x86_64-pc-windows-msvc`.
-- **Crates autorisées** : `windows`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog`. Toute autre crate se demande d'abord.
+- **Crates autorisées** : `windows`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog` ; en build-dependency, `embed-resource` (icône et version dans l'exe). Toute autre crate se demande d'abord.
 - **Erreurs** : `anyhow::Result` partout, et `.context("…")` sur chaque appel COM ou Win32. Pas de `unwrap()` hors tests.
 - **`unsafe`** : seulement dans `mf.rs`, `video.rs`, `audio.rs`, `save.rs` et `main.rs` pour la boucle de messages et le bip (`RegisterHotKey`, `GetMessageW`, `MessageBeep`). Chaque bloc porte un commentaire `// SAFETY:`. `ring.rs`, `config.rs` et `mix.rs` ont `#![forbid(unsafe_code)]`. `tray.rs` (icône, menu, registre) peut aussi contenir de l'`unsafe`.
 - **Pas de console en release** : `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`.
@@ -36,12 +36,14 @@ cargo fmt
 
 Spikes : `cargo run --example <nom>` (fichiers dans `examples/`, jetables, ils ne sont pas réutilisés par `src/`).
 
-## Version installée
+## Installeur et version installée
 
-- Exe : `%LOCALAPPDATA%\Programs\Clipper\clipper.exe`, avec son `clipper.toml` à côté.
-- Démarrage auto : valeur `Clipper` de `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, pilotée par la case « Démarrer avec Windows » du menu de l'icône.
+- Construire : `cargo build --release`, puis `"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\clipper.iss` → `target\installer\ClipperSetup-<version>.exe`. La version vient de `Cargo.toml` (via les infos de version de l'exe).
+- Installer ou mettre à jour : lancer le setup (il ferme le Clipper en cours). Silencieux : `/VERYSILENT /SUPPRESSMSGBOXES /TASKS=startup`. Ne pas lancer le setup avec `Start-Process -Wait` : il attend aussi Clipper, lancé en fin d'installation.
+- Installé par utilisateur dans `%LOCALAPPDATA%\Programs\Clipper` (exe + `clipper.toml`), désinstallable depuis « Applications installées ».
+- Démarrage auto : valeur `Clipper` de `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (case du setup ou du menu de l'icône).
 - Log : `%LOCALAPPDATA%\clipper\clipper.log` (`clipper-debug.log` pour une build debug). Clips : `Vidéos\Clipper`.
-- Mettre à jour : `cargo build --release`, arrêter le process `clipper`, copier `target\release\clipper.exe` par-dessus, relancer l'exe installé.
+- Icône : maquette `assets/clipper.svg` ; après modification, régénérer `assets/clipper.ico` : `magick -background none -density 384 assets/clipper.svg -define icon:auto-resize=256,64,48,40,32,24,20,16 assets/clipper.ico`.
 
 ## Avant de dire « fini »
 

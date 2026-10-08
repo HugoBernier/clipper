@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Maquette provisoire : à remplacer par le design définitif (même nom de fichier). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A2A31"/>
+      <stop offset="1" stop-color="#16161A"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="url(#bg)"/>
+  <!-- Flèche circulaire « replay » : arc de ~300° ouvert en haut à gauche. -->
+  <path d="M 72.6 77.6 A 78 78 0 1 1 50 128"
+        fill="none" stroke="#F4F4F5" stroke-width="20" stroke-linecap="round"/>
+  <path d="M 44 54 L 88 60 L 58 94 Z" fill="#F4F4F5" stroke="#F4F4F5" stroke-width="8" stroke-linejoin="round"/>
+  <!-- Point « enregistrement ». -->
+  <circle cx="128" cy="128" r="40" fill="#E53935"/>
+</svg>

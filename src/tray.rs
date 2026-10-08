@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use anyhow::{Context, Result, bail};
 use log::{error, info};
 use windows::Win32::Foundation::{ERROR_SUCCESS, HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::Graphics::Gdi::{CreateBitmap, DeleteObject};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
@@ -29,7 +28,8 @@ const ID_STARTUP: usize = 2;
 const ID_QUIT: usize = 3;
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const RUN_VALUE: PCWSTR = w!("Clipper");
-const ICON_SIZE: i32 = 32;
+/// Icône de l'application (assets/clipper.rc), aussi utilisée pour la notification.
+const ICON_RESOURCE: u16 = 1;
 
 /// État lu par la procédure de fenêtre (fonction `extern "system"` sans contexte).
 static CLIPS_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -79,7 +79,7 @@ impl Tray {
                 RegisterWindowMessageW(w!("TaskbarCreated")),
                 Ordering::Relaxed,
             );
-            ICON.store(create_icon()?.0 as usize, Ordering::Relaxed);
+            ICON.store(load_icon(instance.into())?.0 as usize, Ordering::Relaxed);
             add_icon(hwnd)?;
             Ok(Self { hwnd })
         }
@@ -253,58 +253,26 @@ fn run_command(exe: &str) -> String {
     format!("\"{exe}\"")
 }
 
-fn create_icon() -> Result<HICON> {
-    let pixels = record_dot(ICON_SIZE as usize);
-    let mask = vec![0u8; (ICON_SIZE * ICON_SIZE / 8) as usize];
-    // SAFETY: bitmaps créés à partir de tampons de la bonne taille, libérés après
-    // copie dans l'icône.
+/// Icône de l'exe, à la taille des petites icônes (suit le DPI).
+fn load_icon(instance: windows::Win32::Foundation::HINSTANCE) -> Result<HICON> {
+    // SAFETY: ressource embarquée par build.rs ; MAKEINTRESOURCE = id casté en pointeur.
     unsafe {
-        let color = CreateBitmap(ICON_SIZE, ICON_SIZE, 1, 32, Some(pixels.as_ptr().cast()));
-        let mask = CreateBitmap(ICON_SIZE, ICON_SIZE, 1, 1, Some(mask.as_ptr().cast()));
-        let info = ICONINFO {
-            fIcon: true.into(),
-            hbmMask: mask,
-            hbmColor: color,
-            ..Default::default()
-        };
-        let icon = CreateIconIndirect(&info).context("CreateIconIndirect");
-        let _ = DeleteObject(color.into());
-        let _ = DeleteObject(mask.into());
-        icon
+        let handle = LoadImageW(
+            Some(instance),
+            PCWSTR(ICON_RESOURCE as usize as *const u16),
+            IMAGE_ICON,
+            GetSystemMetrics(SM_CXSMICON),
+            GetSystemMetrics(SM_CYSMICON),
+            LR_DEFAULTCOLOR,
+        )
+        .context("LoadImageW (icône)")?;
+        Ok(HICON(handle.0))
     }
-}
-
-/// Point rouge « enregistrement » sur fond transparent, bords lissés, en BGRA.
-fn record_dot(size: usize) -> Vec<u32> {
-    let center = size as f32 / 2.0;
-    let radius = size as f32 * 0.38;
-    (0..size * size)
-        .map(|i| {
-            let (x, y) = ((i % size) as f32 + 0.5, (i / size) as f32 + 0.5);
-            let distance = ((x - center).powi(2) + (y - center).powi(2)).sqrt();
-            let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
-            let alpha = (coverage * 255.0).round() as u32;
-            (alpha << 24) | 0x00E5_3935
-        })
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn dot_is_opaque_in_the_middle_and_transparent_in_the_corners() {
-        let px = record_dot(32);
-        assert_eq!(px[16 * 32 + 16] >> 24, 255);
-        assert_eq!(px[0] >> 24, 0);
-        assert_eq!(px[32 * 32 - 1] >> 24, 0);
-    }
-
-    #[test]
-    fn dot_is_red() {
-        assert_eq!(record_dot(32)[16 * 32 + 16] & 0x00FF_FFFF, 0x00E5_3935);
-    }
 
     #[test]
     fn run_command_quotes_the_path() {

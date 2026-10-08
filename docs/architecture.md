@@ -34,6 +34,9 @@ src/
   audio.rs   # son du PC (loopback) + micro WASAPI → timelines → mixeur → MFT AAC
   mix.rs     # mixage pur de sources PCM alignées sur la même origine (TDD)
   tray.rs    # icône de notification, menu, démarrage avec Windows (registre Run)
+build.rs     # compile assets/clipper.rc (icône + version) dans l'exe
+assets/      # clipper.svg (maquette d'icône), clipper.ico, clipper.rc
+installer/   # clipper.iss (Inno Setup)
   save.rs    # snapshot → SinkWriter passthrough → .tmp → faststart (pur) → rename
 ```
 

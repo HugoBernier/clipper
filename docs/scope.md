@@ -36,7 +36,6 @@ Au raccourci, un MP4 des **30 dernières secondes** (image + son du jeu), qui s'
 - rotation des logs ;
 - rechargement à chaud de la config ;
 - hotkey « quitter » ;
-- installeur ;
 - ffmpeg ;
 - plusieurs durées de clip.
 
@@ -62,6 +61,7 @@ D'ici là, OBS reste l'outil du quotidien.
 | 3 | Prod : sous-système Windows, log, bips, démarrage auto | Survit à un reboot et à une soirée de Hunt et R6. **Code fait le 2026-10-08** : pas de console, log fichier en heure locale, bips, clips dans Vidéos\Clipper, changement de résolution géré (bandes noires), double appui ignoré (testé), 37 tests. Installé avec démarrage auto le 2026-10-08 ; clips avec son validés par l'utilisateur. **Reste à faire** : reboot, soirée de jeu et cas limites en jeu. |
 | 4 | Micro mixé au son du PC (voir ci-dessous) | Voix audible et synchro (< 1 image) avec le jeu ; micro absent ou débranché → clip quand même, avec le son du PC ; pas de dérive sur 1 h. **Code fait le 2026-10-08** : micro de communication capté (Scarlett Solo, paquets de 10 ms, ~8 ms de latence, aucune correction), mixeur pur (6 tests), clip mixé vidéo/audio alignés, 45 tests. **Reste à faire** : voix + tir en jeu, débrancher/rebrancher le micro, 1 h. |
 | 5 | Icône dans la zone de notification (voir ci-dessous) | Icône visible près de l'horloge ; menu : ouvrir le dossier des clips, « Démarrer avec Windows » (coché selon l'état réel), quitter ; l'icône revient si l'Explorateur redémarre. **Fait le 2026-10-08** : icône, info-bulle, menu testés par l'utilisateur ; aucun bouton dans la barre des tâches ; 48 tests. |
+| 6 | Installeur Windows (voir ci-dessous) | `ClipperSetup.exe` installe sans droits admin, crée l'entrée du menu Démarrer, propose le démarrage avec Windows et lance Clipper ; Clipper apparaît dans « Applications installées » avec son icône ; la désinstallation retire exe, raccourci et clé de démarrage, garde les clips ; réinstaller par-dessus une version qui tourne fonctionne. **Fait le 2026-10-08** : setup de 2,6 Mo ; testé en silencieux : installation par-dessus le Clipper en cours (fermé puis relancé), entrée « Clipper 0.1.0 » avec icône, menu Démarrer, clé `Run` ; désinstallation propre, clips conservés. Icône et version compilées dans l'exe (maquette SVG). **Reste à faire** : l'assistant graphique vu par l'utilisateur, le design définitif de l'icône. |
 
 ## Itération 4 : micro
 
@@ -98,5 +98,18 @@ D'ici là, OBS reste l'outil du quotidien.
 - Une fenêtre cachée reçoit les messages de l'icône ; elle n'apparaît ni à l'écran ni dans la barre des tâches.
 
 **Hors itération** : icône de l'exe dans l'Explorateur (demande une ressource compilée, donc une crate ou un script de build), notification Windows à chaque clip (le bip suffit).
+
+## Itération 6 : installeur Windows
+
+**Pourquoi** : installer, mettre à jour et désinstaller Clipper comme n'importe quel logiciel, sans copier d'exe à la main.
+
+**Ce qui est dans l'itération**
+- **Inno Setup** (gratuit, y compris en commercial) : script `installer/clipper.iss`, sortie `target/installer/ClipperSetup-<version>.exe`.
+- Installation **par utilisateur**, sans droits admin, dans `%LOCALAPPDATA%\Programs\Clipper` (comme Discord, VS Code) : la config reste modifiable à côté de l'exe.
+- Menu Démarrer, case « Démarrer avec Windows » (même valeur `Run` que le menu de l'icône), lancement en fin d'installation, désinstalleur dans « Applications installées ».
+- Une mise à jour ferme le Clipper en cours avant de remplacer l'exe.
+- **Icône de l'application** : maquette SVG (`assets/clipper.svg`, à remplacer par un design définitif), convertie en `.ico` multi-tailles et compilée dans l'exe (crate de build `embed-resource`). L'icône de notification utilise la même ressource. Informations de version (nom, version) dans l'exe.
+
+**Hors itération** : signature de code (certificat payant ; sans lui, SmartScreen avertit au premier lancement du setup), mise à jour automatique, installation pour tous les utilisateurs.
 
 Sortie de secours : si le spike A dépasse 3 soirées, on passe l'encodage et le mux à ffmpeg, et on garde WGC et WASAPI en natif.
