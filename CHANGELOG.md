@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.0](https://github.com/HugoBernier/clipper/compare/v0.2.0...v0.3.0) (2026-10-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* `target_mb` et les préréglages Discord sont retirés de clipper.toml au profit de `quality` et `microphone_volume`. Un ancien fichier est relu sans erreur, mais un préréglage 1080p30 ou 1440p60 donne désormais des clips plus lourds.
+
+### Features
+
+* régler Clipper depuis une fenêtre (qualité, durée, micro, dossier, raccourci) ([#5](https://github.com/HugoBernier/clipper/issues/5)) ([6cfb19b](https://github.com/HugoBernier/clipper/commit/6cfb19bba1be1566edfb621a84b646a95099754c))
+
+
+### Bug Fixes
+
+* ouvrir les listes au bon endroit et rendre le clavier à la fenêtre ([#7](https://github.com/HugoBernier/clipper/issues/7)) ([eb1fdf8](https://github.com/HugoBernier/clipper/commit/eb1fdf87fe7e17edf7e101f70f86a48df95e9876))
+
 ## [0.2.0](https://github.com/HugoBernier/clipper/compare/v0.1.1...v0.2.0) (2026-10-09)
 
 
