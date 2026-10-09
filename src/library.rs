@@ -410,12 +410,19 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("b.mp4")).unwrap(), b"b");
         assert_eq!(rename(&dir, "a.mp4", "ace").unwrap(), "ace.mp4");
         assert!(dir.join("ace.mp4").exists() && !dir.join("a.mp4").exists());
-        // Dossier sensible à la casse (ou repli de casse différent de NTFS) : « A.mp4 »
-        // est un autre clip que « a.mp4 », il ne doit pas être écrasé.
+        // Dossier sensible à la casse : « A.mp4 » est un autre clip que « a.mp4 », il ne
+        // doit pas être écrasé. Sinon (NTFS par défaut), c'est le même fichier et
+        // changer la casse est permis.
         std::fs::write(dir.join("A.mp4"), b"autre").unwrap();
         std::fs::write(dir.join("a.mp4"), b"a").unwrap();
-        assert!(rename(&dir, "a.mp4", "A").is_err());
-        assert_eq!(std::fs::read(dir.join("A.mp4")).unwrap(), b"autre");
+        let distinct = !same_file(&dir.join("A.mp4"), &dir.join("a.mp4"));
+        let result = rename(&dir, "a.mp4", "A");
+        if distinct {
+            assert!(result.is_err());
+            assert_eq!(std::fs::read(dir.join("A.mp4")).unwrap(), b"autre");
+        } else {
+            assert_eq!(result.unwrap(), "A.mp4");
+        }
         // Changer seulement la casse, accents compris : pas une collision.
         std::fs::write(dir.join("été.mp4"), b"e").unwrap();
         assert_eq!(rename(&dir, "été.mp4", "Été").unwrap(), "Été.mp4");
