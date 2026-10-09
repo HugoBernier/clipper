@@ -36,9 +36,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::COPYENGINE_E_SHARING_VIOLATION_SRC;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONERROR,
-    MB_ICONHAND, MB_OK, MESSAGEBOX_STYLE, MSG, MessageBoxW, PostMessageW, PostQuitMessage,
-    RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONHAND,
+    MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MESSAGEBOX_STYLE, MSG, MessageBoxW, PostMessageW,
+    PostQuitMessage, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+    WM_HOTKEY, WNDCLASSW,
 };
 use windows::core::{HRESULT, HSTRING, w};
 
@@ -69,30 +70,41 @@ fn main() -> Result<()> {
     // panic = "abort" en release : le hook est le seul endroit où la consigner.
     std::panic::set_hook(Box::new(|info| {
         error!("panic : {info}");
-        beep(false);
+        report_stop(&format!("panic : {info}"));
     }));
     if let Err(e) = run() {
         error!("{e:#}");
-        report_stop(&e);
+        report_stop(&format!("{e:#}"));
         return Err(e);
     }
     Ok(())
 }
 
-/// Clipper s'arrête : sans fenêtre ni icône, un son passerait inaperçu, on l'écrit.
-fn report_stop(e: &anyhow::Error) {
+/// Clipper s'arrête : sans fenêtre ni icône, un son passerait inaperçu, on l'écrit. Au
+/// premier plan, pour ne pas s'ouvrir derrière un jeu en plein écran.
+fn report_stop(cause: &str) {
     let text = format!(
-        "Clipper s'est arrêté :\n\n{e:#}\n\nDétails dans %LOCALAPPDATA%\\clipper\\clipper.log"
+        "Clipper s'est arrêté :\n\n{cause}\n\nDétails dans %LOCALAPPDATA%\\clipper\\{}",
+        log_name()
     );
     // SAFETY: boîte modale sans fenêtre parente, chaînes valides pendant l'appel.
     unsafe {
         MessageBoxW(
             None,
             &HSTRING::from(text),
-            windows::core::w!("Clipper"),
-            MB_OK | MB_ICONERROR,
+            w!("Clipper"),
+            MB_OK | MB_ICONHAND | MB_SETFOREGROUND | MB_TOPMOST,
         )
     };
+}
+
+/// Nom distinct en debug : ne pas écraser le log de la version installée.
+fn log_name() -> &'static str {
+    if cfg!(debug_assertions) {
+        "clipper-debug.log"
+    } else {
+        "clipper.log"
+    }
 }
 
 /// Log dans `%LOCALAPPDATA%\clipper\clipper.log`, recréé à chaque démarrage (pas de
@@ -102,13 +114,7 @@ fn init_log() -> Result<()> {
     let dir = PathBuf::from(std::env::var_os("LOCALAPPDATA").context("LOCALAPPDATA absent")?)
         .join("clipper");
     std::fs::create_dir_all(&dir)?;
-    // Nom distinct en debug : ne pas écraser le log de la version installée.
-    let name = if cfg!(debug_assertions) {
-        "clipper-debug.log"
-    } else {
-        "clipper.log"
-    };
-    let file = std::fs::File::create(dir.join(name))?;
+    let file = std::fs::File::create(dir.join(log_name()))?;
     let level = if std::env::var_os("CLIPPER_DEBUG").is_some() {
         log::LevelFilter::Debug
     } else {
@@ -222,7 +228,8 @@ fn run() -> Result<()> {
     APP.with_borrow_mut(|app| *app = None);
     // WM_QUIT avec wParam 1 : le thread vidéo s'est arrêté sur une erreur (déjà loguée).
     if msg.wParam.0 == 1 {
-        bail!("arrêt : erreur vidéo");
+        let reason = video::stop_reason().unwrap_or_else(|| "cause inconnue".into());
+        bail!("vidéo arrêtée : {reason}");
     }
     info!("arrêt demandé");
     Ok(())

@@ -22,7 +22,7 @@ use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TY
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIAdapter, IDXGIDevice, IDXGIFactory4,
+    CreateDXGIFactory1, IDXGIAdapter, IDXGIDevice, IDXGIFactory1, IDXGIFactory4,
 };
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
 use windows::Win32::Media::MediaFoundation::*;
@@ -71,6 +71,14 @@ impl Video {
     }
 }
 
+/// Cause de l'arrêt de la vidéo après son démarrage (le thread principal reçoit WM_QUIT
+/// et l'affiche).
+static STOP_REASON: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn stop_reason() -> Option<String> {
+    STOP_REASON.lock().unwrap_or_else(|p| p.into_inner()).take()
+}
+
 /// Démarre la capture et l'encodage dans un thread dédié. Renvoie une fois
 /// l'initialisation réussie, ou son erreur. Si l'encodage échoue plus tard, le thread
 /// `main_thread` reçoit WM_QUIT.
@@ -97,6 +105,8 @@ pub fn spawn(
                     }
                     // SAFETY: simple envoi de message au thread principal.
                     None => unsafe {
+                        *STOP_REASON.lock().unwrap_or_else(|p| p.into_inner()) =
+                            Some(format!("{e:#}"));
                         let _ = PostThreadMessageW(main_thread, WM_QUIT, WPARAM(1), LPARAM(0));
                     },
                 }
@@ -212,8 +222,13 @@ fn open_encoder(
     String,
     IMFActivate,
 )> {
+    let mut encoders = hardware_encoders()?;
+    // D'abord l'encodeur de la carte qui affiche l'écran capturé : sinon chaque image
+    // traverserait le PCIe d'une carte à l'autre pendant le jeu.
+    let display = display_luid();
+    encoders.sort_by_key(|a| display.is_none() || encoder_luid(a) != display);
     let mut refused = Vec::new();
-    for activate in hardware_encoders()? {
+    for activate in encoders {
         let name = friendly_name(&activate).unwrap_or_else(|_| "encodeur inconnu".into());
         match try_encoder(&activate, format) {
             Ok((device, context, mft)) => return Ok((device, context, mft, name, activate)),
@@ -283,53 +298,99 @@ fn friendly_name(activate: &IMFActivate) -> Result<String> {
     }
 }
 
-/// Carte graphique de l'encodeur (`MFT_ENUM_ADAPTER_LUID`) ; `None` s'il ne la donne
-/// pas : le GPU par défaut est alors essayé.
-fn encoder_adapter(activate: &IMFActivate) -> Result<Option<IDXGIAdapter>> {
+/// Carte graphique de l'encodeur (`MFT_ENUM_ADAPTER_LUID`), en (partie basse, partie
+/// haute) du LUID ; `None` s'il ne la donne pas.
+fn encoder_luid(activate: &IMFActivate) -> Option<(u32, i32)> {
     let mut luid = [0u8; size_of::<LUID>()];
-    // SAFETY: tampon de la taille d'un LUID ; attribut absent = erreur, ignorée.
-    if unsafe { activate.GetBlob(&MFT_ENUM_ADAPTER_LUID, &mut luid, None) }.is_err() {
-        return Ok(None);
+    // SAFETY: tampon de la taille d'un LUID ; attribut absent = erreur.
+    unsafe { activate.GetBlob(&MFT_ENUM_ADAPTER_LUID, &mut luid, None) }.ok()?;
+    let (low, high) = luid.split_at(4);
+    Some((
+        u32::from_le_bytes(low.try_into().ok()?),
+        i32::from_le_bytes(high.try_into().ok()?),
+    ))
+}
+
+/// Carte graphique qui affiche l'écran principal (celui qu'on capture).
+fn display_luid() -> Option<(u32, i32)> {
+    // SAFETY: énumération DXGI standard ; HMONITOR comparé, jamais déréférencé.
+    unsafe {
+        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        (0..)
+            .map_while(|i| factory.EnumAdapters1(i).ok())
+            .find(|adapter| {
+                (0..)
+                    .map_while(|j| adapter.EnumOutputs(j).ok())
+                    .any(|output| output.GetDesc().is_ok_and(|d| d.Monitor == monitor))
+            })
+            .and_then(|adapter| adapter.GetDesc1().ok())
+            .map(|desc| (desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart))
     }
+}
+
+/// Adaptateur DXGI de l'encodeur ; `None` (GPU par défaut) s'il est introuvable.
+fn encoder_adapter(activate: &IMFActivate) -> Option<IDXGIAdapter> {
+    let (low, high) = encoder_luid(activate)?;
     let luid = LUID {
-        LowPart: u32::from_le_bytes(luid[..4].try_into()?),
-        HighPart: i32::from_le_bytes(luid[4..].try_into()?),
+        LowPart: low,
+        HighPart: high,
     };
     // SAFETY: fabrique DXGI standard ; l'adaptateur est recherché par son LUID.
-    unsafe {
-        let factory: IDXGIFactory4 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
-        Ok(Some(
-            factory
-                .EnumAdapterByLuid(luid)
-                .context("EnumAdapterByLuid")?,
-        ))
-    }
+    let adapter = unsafe {
+        CreateDXGIFactory1::<IDXGIFactory4>()
+            .context("CreateDXGIFactory1")
+            .and_then(|f| f.EnumAdapterByLuid(luid).context("EnumAdapterByLuid"))
+    };
+    adapter
+        .inspect_err(|e| warn!("carte de l'encodeur introuvable ({e:#}) : GPU par défaut"))
+        .ok()
 }
 
 fn try_encoder(
     activate: &IMFActivate,
     format: &VideoFormat,
 ) -> Result<(ID3D11Device, ID3D11DeviceContext, IMFTransform)> {
-    let adapter = encoder_adapter(activate)?;
+    let adapter = encoder_adapter(activate);
     let (device, context) = create_device(adapter.as_ref())?;
-    // SAFETY: API MF documentée, objets créés et configurés sur ce thread.
+    // SAFETY: API MF documentée, objet créé sur ce thread.
+    let mft: IMFTransform = unsafe { activate.ActivateObject() }.context("ActivateObject")?;
+    if let Err(e) = configure_encoder(&mft, &device, format) {
+        // Un MFT asynchrone garde des références circulaires tant qu'il n'est pas
+        // arrêté : sans ça, chaque encodeur écarté resterait en mémoire.
+        if let Ok(shutdown) = mft.cast::<IMFShutdown>() {
+            // SAFETY: fin de vie documentée d'un MFT asynchrone ; plus aucun appel ensuite.
+            let _ = unsafe { shutdown.Shutdown() };
+        }
+        return Err(e);
+    }
+    Ok((device, context, mft))
+}
+
+fn configure_encoder(
+    mft: &IMFTransform,
+    device: &ID3D11Device,
+    format: &VideoFormat,
+) -> Result<()> {
+    // SAFETY: API MF documentée, MFT et device créés sur ce thread.
     unsafe {
-        let mft: IMFTransform = activate.ActivateObject().context("ActivateObject")?;
-        mft.GetAttributes()?
-            .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
+        mft.GetAttributes()
+            .context("GetAttributes")?
+            .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)
+            .context("MF_TRANSFORM_ASYNC_UNLOCK")?;
 
         let mut token = 0;
         let mut manager = None;
-        MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
+        MFCreateDXGIDeviceManager(&mut token, &mut manager).context("MFCreateDXGIDeviceManager")?;
         let manager = manager.context("device manager nul")?;
-        manager.ResetDevice(&device, token)?;
+        manager.ResetDevice(device, token).context("ResetDevice")?;
         mft.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize)
             .context("SET_D3D_MANAGER")?;
 
         // Réglages alignés sur OBS (AMF) : CBR, keyframe toutes les 1 s, pas de
         // B-frames (pts = dts), preset qualité, VBV d'1 s pour borner les dépassements.
         // Le mode de débit se règle avant les types.
-        let codec: ICodecAPI = mft.cast()?;
+        let codec: ICodecAPI = mft.cast().context("ICodecAPI")?;
         let settings = [
             (
                 "RateControlMode",
@@ -352,9 +413,11 @@ fn try_encoder(
             .context("SetOutputType")?;
         mft.SetInputType(0, &format.nv12_type()?, 0)
             .context("SetInputType")?;
-        mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-        mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-        Ok((device, context, mft))
+        mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)
+            .context("BEGIN_STREAMING")?;
+        mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)
+            .context("START_OF_STREAM")?;
+        Ok(())
     }
 }
 
