@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/HugoBernier/clipper/compare/v0.4.1...v0.5.0) (2026-10-09)
+
+
+### Features
+
+* **audio:** choisir le micro et suivre le changement de périphérique ([#12](https://github.com/HugoBernier/clipper/issues/12)) ([46f930c](https://github.com/HugoBernier/clipper/commit/46f930cc1764a4e12a213dac14cda10d92476420))
+
 ## [0.4.1](https://github.com/HugoBernier/clipper/compare/v0.4.0...v0.4.1) (2026-10-09)
 
 
