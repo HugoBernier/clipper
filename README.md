@@ -11,9 +11,9 @@ Clipper garde en mémoire les 30 dernières secondes de votre écran et de votre
 
 Téléchargez `ClipperSetup-<version>.exe` depuis [Releases](../../releases), puis lancez-le. Pas besoin de droits administrateur.
 
-L'installeur n'est pas encore signé : Windows peut afficher un avertissement, et Defender l'a déjà bloqué à tort. Pour vérifier qu'un fichier vient bien de ce dépôt, comparez son empreinte SHA-256 avec celle affichée sur la page de la release.
+Au premier lancement, Windows peut afficher un avertissement, car l'installeur n'est pas encore signé : cliquez sur *Informations complémentaires*, puis *Exécuter quand même*.
 
-Prérequis : Windows 11 (ou Windows 10 1903+ avec le runtime WebView2), carte graphique avec encodeur H.264 (AMD, NVIDIA ou Intel).
+Il faut Windows 10 ou 11 et une carte graphique AMD, NVIDIA ou Intel récente.
 
 ## Utilisation
 
@@ -21,7 +21,7 @@ Prérequis : Windows 11 (ou Windows 10 1903+ avec le runtime WebView2), carte gr
 |---|---|
 | Enregistrer les 30 dernières secondes | **Alt+F10** (un son confirme) |
 | Revoir, copier, glisser, renommer ou supprimer un clip | Clic sur l'icône près de l'horloge → *Clips* |
-| Changer les réglages | Clic sur l'icône → *Réglages* (appliqués tout de suite) |
+| Changer les réglages | Clic sur l'icône → *Réglages* |
 | Ouvrir le dossier des clips | `Vidéos\Clipper`, ou bouton *Ouvrir le dossier* |
 | Couper le micro, démarrer avec Windows, quitter | Clic droit sur l'icône |
 
@@ -47,7 +47,9 @@ Clipper est écrit en Rust avec l'aide de Claude Code (IA). Chaque changement pa
 
 ## Réglages
 
-La fenêtre suffit. Pour éditer à la main : `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), puis relancez Clipper.
+Tout se règle dans la fenêtre, et chaque changement s'applique immédiatement, sans relancer Clipper.
+
+Les mêmes réglages sont enregistrés dans `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`). Seule une modification faite à la main dans ce fichier demande de relancer Clipper.
 
 | Clé | Défaut | Rôle |
 |---|---|---|
