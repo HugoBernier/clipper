@@ -43,9 +43,10 @@ Depuis l'itération 9 : la durée, la résolution, les fps et la qualité sont d
 - plafond de taille en Mo (la qualité s'adapterait à la durée) ;
 - volume du son du PC (seul le micro est réglable) ;
 - déplacer les anciens clips quand on change de dossier ;
+- vignettes dans la liste des clips ;
 - préréglages de qualité (retirés à l'itération 9).
 
-Les six premières lignes ci-dessus ont été proposées le 2026-10-09 : à demander quand le besoin se présente.
+Les sept premières lignes ci-dessus ont été proposées le 2026-10-09 : à demander quand le besoin se présente.
 
 ## Définition de « réussi »
 
@@ -155,7 +156,7 @@ D'ici là, OBS reste l'outil du quotidien.
 
 **Pourquoi** : un vrai logiciel, réglable sans fichier de config, où l'on revoit ses clips et où on les partage en un geste. Ordre voulu par l'utilisateur : **les fonctions d'abord** (visuel brut), puis l'habillage quand le design system sera disponible.
 
-**Technologie (décidée le 2026-10-09)** : app native, **sans Electron**. Un seul exe Rust. Une fenêtre Win32 à nous dont le contenu est en HTML, affiché par **WebView2** (le moteur d'Edge, déjà présent dans Windows 11, rien à embarquer). Le lecteur vidéo est le `<video>` du moteur, qui lit nos MP4 H.264/AAC sans code de décodage. Le design system se posera ensuite en CSS sans toucher au Rust. Le moteur ne tourne que pendant que la fenêtre est ouverte (environ 100 Mo) ; fermer la fenêtre le détruit et Clipper reste dans la zone de notification. Nouvelle crate **à autoriser dans `CLAUDE.md`** : `webview2-com` (liaison officielle, sans framework).
+**Technologie (décidée le 2026-10-09)** : app native, **sans Electron**. Un seul exe Rust. Une fenêtre Win32 à nous dont le contenu est en HTML, affiché par **WebView2** (le moteur d'Edge, déjà présent dans Windows 11, rien à embarquer). Le lecteur vidéo est le `<video>` du moteur, qui lit nos MP4 H.264/AAC sans code de décodage. Le design system se posera ensuite en CSS sans toucher au Rust. Le moteur ne tourne que pendant que la fenêtre est ouverte (environ 100 Mo) ; fermer la fenêtre le détruit et Clipper reste dans la zone de notification. Nouvelle crate **autorisée le 2026-10-09** : `webview2-com` (liaison officielle, sans framework).
 
 **Ouverture** : clic gauche sur l'icône, ou « Ouvrir Clipper » dans le menu.
 
@@ -201,7 +202,5 @@ Le plus gros risque passe en premier : intégration à notre boucle de messages,
 ### Itération 11 : habillage
 
 Le design system (disponible plus tard) habille la fenêtre : CSS et structure HTML seulement, aucune fonction ajoutée.
-
-**Question ouverte** : des vignettes dans la liste (comme Medal) ? Elles dépendent du design et ne sont pas demandées pour l'instant.
 
 Sortie de secours : si le spike A dépasse 3 soirées, on passe l'encodage et le mux à ffmpeg, et on garde WGC et WASAPI en natif.
