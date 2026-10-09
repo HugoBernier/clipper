@@ -18,22 +18,25 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use log::{error, info};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
-    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2_3,
-    ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
+    COREWEBVIEW2_COLOR, COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS,
+    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC, CreateCoreWebView2EnvironmentWithOptions,
+    ICoreWebView2, ICoreWebView2_3, ICoreWebView2Controller, ICoreWebView2Controller2,
+    ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
 };
 use webview2_com::{
     ContainsFullScreenElementChangedEventHandler, CreateCoreWebView2ControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, NavigationStartingEventHandler,
     WebMessageReceivedEventHandler, take_pwstr,
 };
-use windows::Win32::Foundation::{COLORREF, ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, E_FAIL, ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM,
+};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
-    DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
+    DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+    CreateSolidBrush, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -208,20 +211,23 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// Jetons du design system utilisés hors de la page (COLORREF : 0x00BBGGRR) ; un test
+/// vérifie qu'ils suivent `docs/design-system/tokens.json`.
+const SURFACE_0: COLORREF = COLORREF(0x001a_1616);
+const INK: COLORREF = COLORREF(0x00f5_f4f4);
+const LINE: COLORREF = COLORREF(0x003c_3434);
+
 /// Barre de titre de Windows aux couleurs du design system (`surface-0`, `ink`, `line`) :
 /// elle se fond dans la fenêtre et garde Snap, le double-clic et Win+flèches. Avant
 /// Windows 11, seuls le mode sombre (ou rien) s'appliquent : sans gravité.
 fn tint_title_bar(hwnd: HWND) {
-    // COLORREF : 0x00BBGGRR.
-    let dark: u32 = 1;
-    let attributes: [(DWMWINDOWATTRIBUTE, u32); 4] = [
-        (DWMWA_USE_IMMERSIVE_DARK_MODE, dark),
-        (DWMWA_CAPTION_COLOR, 0x001a_1616),
-        (DWMWA_TEXT_COLOR, 0x00f5_f4f4),
-        (DWMWA_BORDER_COLOR, 0x003c_3434),
+    let attributes = [
+        (DWMWA_USE_IMMERSIVE_DARK_MODE, COLORREF(1)),
+        (DWMWA_CAPTION_COLOR, SURFACE_0),
+        (DWMWA_TEXT_COLOR, INK),
+        (DWMWA_BORDER_COLOR, LINE),
     ];
     for (attribute, value) in attributes {
-        let value = COLORREF(value);
         // SAFETY: notre fenêtre ; pointeur et taille d'un u32 valides pendant l'appel.
         let result = unsafe {
             DwmSetWindowAttribute(
@@ -320,7 +326,8 @@ fn register_class() -> Result<()> {
         // SAFETY: classe enregistrée une fois, procédure `extern "system"` valide.
         result = unsafe {
             GetModuleHandleW(None).and_then(|instance| {
-                let class = WNDCLASSW {
+                let class = WNDCLASSEXW {
+                    cbSize: size_of::<WNDCLASSEXW>() as u32,
                     lpfnWndProc: Some(window_proc),
                     hInstance: instance.into(),
                     hCursor: LoadCursorW(None, IDC_ARROW)?,
@@ -329,10 +336,15 @@ fn register_class() -> Result<()> {
                         Some(instance.into()),
                         PCWSTR(tray::ICON_RESOURCE as usize as *const u16),
                     )?,
+                    // Barre de titre : la version petite taille du .ico, pas la grande réduite.
+                    hIconSm: tray::load_icon(instance.into())
+                        .map_err(|e| windows::core::Error::new(E_FAIL, format!("{e:#}")))?,
+                    // Fond sombre tant que la page n'est pas affichée.
+                    hbrBackground: CreateSolidBrush(SURFACE_0),
                     lpszClassName: CLASS,
                     ..Default::default()
                 };
-                if RegisterClassW(&class) == 0 {
+                if RegisterClassExW(&class) == 0 {
                     return Err(windows::core::Error::from_thread());
                 }
                 Ok(())
@@ -374,6 +386,20 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
         // SAFETY: contrôleur vivant, sur ce thread.
         unsafe { controller.Close() }.context("Close")?;
         return Ok(());
+    }
+    // Fond de la vue avant le chargement de la page : surface-0, pas le blanc par défaut.
+    if let Ok(controller2) = controller.cast::<ICoreWebView2Controller2>() {
+        let [r, g, b, _] = SURFACE_0.0.to_le_bytes();
+        let color = COREWEBVIEW2_COLOR {
+            A: 255,
+            R: r,
+            G: g,
+            B: b,
+        };
+        // SAFETY: contrôleur vivant, sur ce thread.
+        if let Err(e) = unsafe { controller2.SetDefaultBackgroundColor(color) } {
+            info!("fond de la vue non teinté : {e}");
+        }
     }
     // SAFETY: contrôleur vivant, sur ce thread.
     let webview = unsafe { controller.CoreWebView2() }.context("CoreWebView2")?;
@@ -611,6 +637,25 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// COLORREF d'un jeton de couleur de `tokens.json` (valeur `#rrggbb`).
+    fn token(name: &str) -> u32 {
+        let tokens = include_str!("../docs/design-system/tokens.json");
+        let at = tokens
+            .find(&format!("\"name\": \"{name}\""))
+            .unwrap_or_else(|| panic!("jeton {name} absent"));
+        let value = &tokens[at..];
+        let hex = &value[value.find("\"value\": \"#").unwrap() + 11..][..6];
+        let rgb = u32::from_str_radix(hex, 16).unwrap();
+        (rgb & 0xff) << 16 | (rgb & 0xff00) | rgb >> 16
+    }
+
+    #[test]
+    fn title_bar_colours_follow_the_tokens() {
+        assert_eq!(SURFACE_0.0, token("surface-0"));
+        assert_eq!(INK.0, token("ink"));
+        assert_eq!(LINE.0, token("line"));
+    }
 
     #[test]
     fn page_embeds_the_design_system() {

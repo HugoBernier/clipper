@@ -343,8 +343,9 @@ fn create_shortcut(link: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Icône de l'exe, à la taille des petites icônes (suit le DPI).
-fn load_icon(instance: windows::Win32::Foundation::HINSTANCE) -> Result<HICON> {
+/// Icône de l'exe, à la taille des petites icônes (suit le DPI) : le .ico en contient
+/// une version simplifiée pour ces tailles.
+pub fn load_icon(instance: windows::Win32::Foundation::HINSTANCE) -> Result<HICON> {
     // SAFETY: ressource embarquée par build.rs ; MAKEINTRESOURCE = id casté en pointeur.
     unsafe {
         let handle = LoadImageW(
