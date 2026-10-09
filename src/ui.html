@@ -64,6 +64,9 @@
   </label>
   <p id="estimate"></p>
   <label><input name="microphone" type="checkbox"> Micro</label>
+  <label>Quel micro
+    <select name="microphone_device"></select>
+  </label>
   <label>Volume du micro
     <input name="microphone_volume" type="range" min="0" max="200" step="5">
     <output id="volume"></output> %
@@ -108,6 +111,15 @@
       const i = line.indexOf('=');
       return [line.slice(0, i), line.slice(i + 1)];
     }));
+    // Liste des micros avant d'y sélectionner le micro choisi.
+    const mics = form.elements.microphone_device;
+    mics.textContent = '';
+    mics.append(new Option('Par défaut (micro de communication de Windows)', ''));
+    const parts = (state.microphones ?? '').split('\t');
+    for (let i = 0; i + 1 < parts.length; i += 2) mics.append(new Option(parts[i + 1], parts[i]));
+    if (![...mics.options].some(o => o.value === state.microphone_device)) {
+      mics.append(new Option('Micro choisi (débranché)', state.microphone_device));
+    }
     for (const el of form.elements) {
       if (!(el.name in state)) continue;
       if (el.type === 'checkbox') el.checked = state[el.name] === 'true';

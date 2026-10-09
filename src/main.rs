@@ -175,7 +175,11 @@ fn run() -> Result<()> {
 
     let ring = Arc::new(Mutex::new(Ring::new(keep(&config))));
     let video = spawn_video(&config, &ring)?;
-    let microphone = Arc::new(Microphone::new(config.microphone, config.microphone_volume));
+    let microphone = Arc::new(Microphone::new(
+        config.microphone,
+        config.microphone_volume,
+        config.microphone_device.clone(),
+    ));
     // Sans audio (aucune sortie son, encodeur absent), on garde au moins la vidéo.
     let audio = audio::spawn(AUDIO_BPS, microphone.clone(), ring.clone())
         .inspect_err(|e| warn!("clips sans son : {e:#}"))
@@ -485,6 +489,14 @@ impl App {
         self.microphone
             .volume
             .store(next.microphone_volume, Ordering::Relaxed);
+        // Le thread audio rouvre le micro à sa prochaine vérification.
+        next.microphone_device.clone_into(
+            &mut self
+                .microphone
+                .device
+                .lock()
+                .unwrap_or_else(|p| p.into_inner()),
+        );
         tray::set_microphone(next.microphone);
         // Remapper le dossier du lecteur couperait une lecture en cours : seulement s'il
         // change, et la liste suit.
@@ -579,6 +591,17 @@ impl App {
             format.width,
             f64::from(format.bitrate) / 1e6,
         ));
+        // Micros branchés, en paires identifiant⇥nom.
+        match audio::microphones() {
+            Ok(mics) => {
+                let list: Vec<String> = mics
+                    .iter()
+                    .map(|(id, name)| format!("{id}\t{name}"))
+                    .collect();
+                state.push_str(&format!("microphones={}\n", list.join("\t")));
+            }
+            Err(e) => warn!("liste des micros : {e:#}"),
+        }
         state
     }
 }

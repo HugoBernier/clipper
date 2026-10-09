@@ -41,6 +41,7 @@ Fichier `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), 
 | `output_dir` | `"Clipper"` | Dossier des clips, relatif au dossier Vidéos ou absolu |
 | `microphone` | `true` | Mixer le micro de communication au son du PC |
 | `microphone_volume` | `100` | Volume du micro dans le clip, en % (0 à 200) |
+| `microphone_device` | `""` | Micro à capturer (identifiant Windows, choisi dans la fenêtre) ; vide : le micro de communication par défaut |
 
 Log : `%LOCALAPPDATA%\clipper\clipper.log`.
 

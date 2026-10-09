@@ -30,6 +30,8 @@ const TOLERANCE: i64 = SEC / 100;
 /// latence de la loopback, pour ne pas devancer un paquet en route.
 const LAG: i64 = SEC / 10;
 const POLL: Duration = Duration::from_millis(10);
+/// Fréquence de vérification du périphérique à capturer.
+const CHECK_DEVICE: Duration = Duration::from_secs(1);
 
 /// Position de l'audio émis, en échantillons depuis `origin` (ts QPC).
 pub struct Timeline {
@@ -103,15 +105,32 @@ pub struct Microphone {
     pub enabled: AtomicBool,
     /// En % (100 = inchangé).
     pub volume: AtomicU32,
+    /// Identifiant Windows du micro ; vide : le micro de communication par défaut.
+    pub device: Mutex<String>,
 }
 
 impl Microphone {
-    pub fn new(enabled: bool, volume: u32) -> Self {
+    pub fn new(enabled: bool, volume: u32, device: String) -> Self {
         Self {
             enabled: AtomicBool::new(enabled),
             volume: AtomicU32::new(volume),
+            device: Mutex::new(device),
         }
     }
+}
+
+/// Micros branchés : (identifiant Windows, nom affiché).
+pub fn microphones() -> Result<Vec<(String, String)>> {
+    let enumerator = wasapi::DeviceEnumerator::new().context("DeviceEnumerator")?;
+    let devices = enumerator
+        .get_device_collection(&wasapi::Direction::Capture)
+        .context("liste des micros")?;
+    (0..devices.get_nbr_devices()?)
+        .map(|i| {
+            let device = devices.get_device_at_index(i)?;
+            Ok((device.get_id()?, device.get_friendlyname()?))
+        })
+        .collect()
 }
 
 /// Démarre capture, mixage et encodage dans un thread dédié ; renvoie le format AAC
@@ -173,9 +192,9 @@ fn frames_duration(frames: u64) -> i64 {
 }
 
 enum Source {
-    /// Son du PC : loopback du périphérique de sortie par défaut.
+    /// Son du PC : loopback du périphérique de sortie par défaut (il le suit).
     System,
-    /// Micro de communication par défaut (celui de Discord).
+    /// Micro choisi, ou celui de communication par défaut (celui de Discord).
     Microphone(Arc<Microphone>),
 }
 
@@ -204,15 +223,31 @@ impl Source {
         }
     }
 
-    fn open(&self) -> Result<(Capture, String)> {
+    /// Le périphérique à capturer maintenant : la sortie par défaut de Windows, ou le
+    /// micro choisi (à défaut, celui de communication par défaut).
+    fn target(&self) -> Result<wasapi::Device> {
         let enumerator = wasapi::DeviceEnumerator::new()?;
-        let device = match self {
+        Ok(match self {
             Source::System => enumerator.get_default_device(&wasapi::Direction::Render)?,
-            Source::Microphone(_) => enumerator.get_default_device_for_role(
-                &wasapi::Direction::Capture,
-                &wasapi::Role::Communications,
-            )?,
-        };
+            Source::Microphone(mic) => {
+                let id = mic.device.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                if id.is_empty() {
+                    enumerator.get_default_device_for_role(
+                        &wasapi::Direction::Capture,
+                        &wasapi::Role::Communications,
+                    )?
+                } else {
+                    enumerator
+                        .get_device(&id)
+                        .context("micro choisi absent (débranché ?)")?
+                }
+            }
+        })
+    }
+
+    /// Ouvre la capture ; renvoie aussi le nom et l'identifiant du périphérique.
+    fn open(&self) -> Result<(Capture, String, String)> {
+        let device = self.target()?;
         let mut client = device.get_iaudioclient()?;
         // autoconvert : le moteur audio livre directement du PCM 16 bits 48 kHz stéréo,
         // quel que soit le format du périphérique (rééchantillonnage, up/downmix).
@@ -236,6 +271,7 @@ impl Source {
                 reader,
             },
             name,
+            device.get_id()?,
         ))
     }
 }
@@ -253,7 +289,11 @@ struct Input {
     index: usize,
     timeline: Timeline,
     capture: Option<Capture>,
+    /// Identifiant du périphérique ouvert.
+    device: String,
     retry_at: Instant,
+    /// Prochaine vérification du périphérique voulu (sortie par défaut changée…).
+    check_at: Instant,
     failing: bool,
 }
 
@@ -264,7 +304,9 @@ impl Input {
             index,
             timeline: Timeline::new(origin),
             capture: None,
+            device: String::new(),
             retry_at: Instant::now(),
+            check_at: Instant::now(),
             failing: false,
         }
     }
@@ -277,12 +319,27 @@ impl Input {
             self.failing = false;
         } else if self.capture.is_none() && Instant::now() >= self.retry_at {
             match self.source.open() {
-                Ok((capture, device)) => {
-                    info!("capture {} : {device}", self.source.name());
+                Ok((capture, name, id)) => {
+                    info!("capture {} : {name}", self.source.name());
                     self.capture = Some(capture);
+                    self.device = id;
                     self.failing = false;
                 }
                 Err(e) => self.fail(&e),
+            }
+        } else if self.capture.is_some() && Instant::now() >= self.check_at {
+            // Windows ne coupe pas la capture quand la sortie par défaut change (casque
+            // branché…) : sans ça, on continuerait d'enregistrer l'ancien périphérique.
+            self.check_at = Instant::now() + CHECK_DEVICE;
+            if self
+                .source
+                .target()
+                .and_then(|d| Ok(d.get_id()?))
+                .is_ok_and(|id| id != self.device)
+            {
+                info!("{} : autre périphérique, réouverture", self.source.name());
+                self.capture = None;
+                self.retry_at = Instant::now();
             }
         }
         if let Some(capture) = &self.capture
