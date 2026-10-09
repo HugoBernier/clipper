@@ -179,6 +179,8 @@ Le plus gros risque passe en premier : intégration à notre boucle de messages,
 - **Menu de l'icône** : le sous-menu « Qualité » disparaît ; ajout de **« Ouvrir Clipper »** et d'une case **« Micro »** (on/off). Le reste ne change pas.
 - **`clipper.toml`** : les préréglages Discord et `target_mb` sont retirés au profit des champs ci-dessus. **Changement cassant** (`feat(config)!`) : un ancien fichier est relu sans erreur (`target_mb` ignoré, les autres valeurs gardées).
 
+**Ajouts du 2026-10-09 (retours de testeur)** : choix du micro dans la fenêtre (défaut : micro de communication de Windows) ; le son du PC et le micro suivent un changement de périphérique sans relancer Clipper.
+
 **Tests (TDD, logique pure)** : débit par niveau × résolution × fps, estimation de taille, bornes (durée, volume), relecture d'un ancien `clipper.toml`, gain du micro dans le mixeur (0 %, 100 %, 200 % qui sature).
 
 **Risques à vérifier pendant l'itération**
