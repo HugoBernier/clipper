@@ -1,5 +1,5 @@
-//! Bibliothèque de clips : liste du dossier, durée lue dans le MP4, noms acceptés
-//! (logique pure, sans API Windows).
+//! Bibliothèque de clips : liste du dossier, durée, hauteur et cadence lues dans le
+//! MP4, noms acceptés (sans API Windows).
 #![forbid(unsafe_code)]
 
 use std::ffi::OsStr;
@@ -12,8 +12,9 @@ use anyhow::{Context, Result, bail, ensure};
 
 use crate::mp4box;
 
-/// Un `mvhd` fait ~120 octets : au-delà, le fichier n'est pas un clip.
-const MAX_MVHD: u64 = 4096;
+/// `mvhd`, `tkhd`, `mdhd` et `hdlr` font moins de 200 octets : au-delà, seul le début est
+/// lu.
+const MAX_BODY: u64 = 4096;
 /// Interdits par Windows dans un nom de fichier.
 const FORBIDDEN: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 const RESERVED: &[&str] = &[
@@ -30,15 +31,26 @@ pub struct ClipInfo {
     pub size: u64,
     /// En secondes ; absente si le fichier n'est pas lisible.
     pub duration: Option<f64>,
+    pub video: Option<Video>,
+}
+
+/// Piste vidéo d'un clip : hauteur (720 pour « 720p ») et images par seconde.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Video {
+    pub height: u32,
+    pub fps: u32,
 }
 
 impl ClipInfo {
-    /// Une ligne pour la page : nom, date, taille, durée, séparés par des tabulations
-    /// (interdites dans un nom de fichier Windows).
+    /// Une ligne pour la page : nom, date, taille, durée, hauteur, images/s, séparés par
+    /// des tabulations (interdites dans un nom de fichier Windows). Inconnu : vide.
     pub fn line(&self) -> String {
         let duration = self.duration.map(|d| d.to_string()).unwrap_or_default();
+        let (height, fps) = self.video.map_or((String::new(), String::new()), |v| {
+            (v.height.to_string(), v.fps.to_string())
+        });
         format!(
-            "{}\t{}\t{}\t{duration}",
+            "{}\t{}\t{}\t{duration}\t{height}\t{fps}",
             self.name, self.modified_ms, self.size
         )
     }
@@ -66,13 +78,15 @@ pub fn list(dir: &Path) -> Result<Vec<ClipInfo>> {
             .ok()
             .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_millis() as u64);
+        let info = (!online_only(&metadata))
+            .then(|| file_info(&path).ok())
+            .flatten();
         clips.push(ClipInfo {
             name: entry.file_name().to_string_lossy().into_owned(),
             modified_ms,
             size: metadata.len(),
-            duration: (!online_only(&metadata))
-                .then(|| file_duration(&path).ok())
-                .flatten(),
+            duration: info.map(|(duration, _)| duration),
+            video: info.and_then(|(_, video)| video),
         });
     }
     clips.sort_by_key(|c| std::cmp::Reverse(c.modified_ms));
@@ -80,7 +94,7 @@ pub fn list(dir: &Path) -> Result<Vec<ClipInfo>> {
 }
 
 /// Fichier OneDrive « disponible en ligne uniquement » : le lire le téléchargerait en
-/// entier. Sa durée n'est pas lue.
+/// entier. Sa durée et sa piste vidéo ne sont pas lues.
 #[cfg(windows)]
 fn online_only(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -100,19 +114,75 @@ fn is_mp4(path: &Path) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
 }
 
-/// Durée d'un MP4, lue dans `moov/mvhd` : seuls les en-têtes de boîtes et `mvhd` sont
-/// lus, où que soit `moov` (devant ou derrière les images).
-pub fn file_duration(path: &Path) -> Result<f64> {
+/// Durée et piste vidéo d'un MP4 : seuls les en-têtes de boîtes et quelques petites
+/// boîtes de `moov` sont lus (pas les tables d'images), où que soit `moov`.
+pub fn file_info(path: &Path) -> Result<(f64, Option<Video>)> {
     let mut file = File::open(path).with_context(|| format!("ouverture de {}", path.display()))?;
     let len = file.metadata()?.len();
     let moov = find_box(&mut file, 0, len, b"moov")?.context("moov absent")?;
-    let mvhd =
-        find_box(&mut file, moov.0 + moov.2, moov.0 + moov.1, b"mvhd")?.context("mvhd absent")?;
-    ensure!(mvhd.1 <= MAX_MVHD, "mvhd trop grand");
-    let mut body = vec![0u8; (mvhd.1 - mvhd.2) as usize];
-    file.seek(SeekFrom::Start(mvhd.0 + mvhd.2))?;
+    let mvhd = child(&mut file, moov, b"mvhd")?;
+    let duration = mvhd_duration(&read_body(&mut file, mvhd, MAX_BODY)?)?;
+    let (mut pos, end) = (moov.0 + moov.2, moov.0 + moov.1);
+    while let Some(trak) = find_box(&mut file, pos, end, b"trak")? {
+        pos = trak.0 + trak.1;
+        // Une piste illisible n'empêche pas d'afficher le clip : on passe à la suivante.
+        if let Ok(Some(video)) = trak_video(&mut file, trak) {
+            return Ok((duration, Some(video)));
+        }
+    }
+    Ok((duration, None))
+}
+
+/// Hauteur et cadence d'une piste ; `None` si ce n'est pas une piste vidéo.
+fn trak_video(file: &mut File, trak: Found) -> Result<Option<Video>> {
+    let mdia = child(file, trak, b"mdia")?;
+    let hdlr = child_body(file, mdia, b"hdlr", MAX_BODY)?;
+    if hdlr.get(8..12) != Some(b"vide") {
+        return Ok(None);
+    }
+    // Hauteur en virgule fixe 16.16 : dernier champ de tkhd, en version 0 comme 1.
+    let tkhd = child_body(file, trak, b"tkhd", MAX_BODY)?;
+    let height = be_u32(&tkhd, tkhd.len().checked_sub(4).context("tkhd tronqué")?)? >> 16;
+    // mdhd place timescale et durée comme mvhd.
+    let mdhd = child_body(file, mdia, b"mdhd", MAX_BODY)?;
+    let seconds = mvhd_duration(&mdhd)?;
+    let minf = child(file, mdia, b"minf")?;
+    let stbl = child(file, minf, b"stbl")?;
+    // stsz : version/flags, taille commune, nombre d'images ; la table qui suit n'est pas lue.
+    let frames = be_u32(&child_body(file, stbl, b"stsz", 12)?, 8)?;
+    ensure!(seconds > 0.0 && frames > 0, "piste vidéo vide");
+    Ok(Some(Video {
+        height,
+        fps: (f64::from(frames) / seconds).round() as u32,
+    }))
+}
+
+/// Boîte dans le fichier : (début, taille, taille de l'en-tête).
+type Found = (u64, u64, u64);
+
+/// Première boîte `kind` contenue dans `parent`.
+fn child(file: &mut File, parent: Found, kind: &[u8; 4]) -> Result<Found> {
+    find_box(file, parent.0 + parent.2, parent.0 + parent.1, kind)?
+        .with_context(|| format!("{} absent", String::from_utf8_lossy(kind)))
+}
+
+/// Les `max` premiers octets de la première boîte `kind` contenue dans `parent`.
+fn child_body(file: &mut File, parent: Found, kind: &[u8; 4], max: u64) -> Result<Vec<u8>> {
+    let b = child(file, parent, kind)?;
+    read_body(file, b, max)
+}
+
+/// Les `max` premiers octets du contenu de `b` (moins s'il est plus court).
+fn read_body(file: &mut File, b: Found, max: u64) -> Result<Vec<u8>> {
+    let mut body = vec![0u8; (b.1 - b.2).min(max) as usize];
+    file.seek(SeekFrom::Start(b.0 + b.2))?;
     file.read_exact(&mut body)?;
-    mvhd_duration(&body)
+    Ok(body)
+}
+
+fn be_u32(data: &[u8], at: usize) -> Result<u32> {
+    let bytes = data.get(at..at + 4).context("boîte tronquée")?;
+    Ok(u32::from_be_bytes(bytes.try_into()?))
 }
 
 /// Première boîte `kind` dans `[from, to)` : (début, taille, taille de l'en-tête).
@@ -141,7 +211,7 @@ fn find_box(
     Ok(None)
 }
 
-/// Durée d'après le contenu de `mvhd` (versions 0 et 1).
+/// Durée d'après le contenu de `mvhd` ou `mdhd` (versions 0 et 1).
 pub fn mvhd_duration(body: &[u8]) -> Result<f64> {
     let field = |at: usize, len: usize| body.get(at..at + len).context("mvhd tronqué");
     let (timescale, duration) = match body.first() {
@@ -173,23 +243,24 @@ pub fn clip_path(dir: &Path, name: &str) -> Result<PathBuf> {
 /// Nom de fichier saisi pour un renommage : espaces retirés, `.mp4` ajouté si absent.
 pub fn new_name(input: &str) -> Result<String> {
     let name = input.trim();
-    ensure!(!name.is_empty(), "nom vide");
+    ensure!(!name.is_empty(), "Nom vide");
     ensure!(
         !name
             .chars()
             .any(|c| c.is_control() || FORBIDDEN.contains(&c)),
-        "un nom ne peut pas contenir {}",
-        FORBIDDEN.iter().collect::<String>()
+        "Caractères interdits : {}",
+        FORBIDDEN
+            .iter()
+            .map(char::to_string)
+            .collect::<Vec<_>>()
+            .join(" ")
     );
     // Windows retire un point final, et réserve ces noms aux périphériques.
-    ensure!(
-        !name.ends_with('.'),
-        "un nom ne peut pas finir par un point"
-    );
+    ensure!(!name.ends_with('.'), "Point final interdit");
     let stem = name.split('.').next().unwrap_or(name);
     ensure!(
         !RESERVED.contains(&stem.to_ascii_lowercase().as_str()),
-        "nom réservé par Windows : {name}"
+        "Nom réservé par Windows"
     );
     Ok(if is_mp4(Path::new(name)) {
         name.to_owned()
@@ -201,16 +272,25 @@ pub fn new_name(input: &str) -> Result<String> {
 /// Renomme un clip sans jamais en écraser un autre ; renvoie le nouveau nom.
 pub fn rename(dir: &Path, old: &str, input: &str) -> Result<String> {
     let from = clip_path(dir, old)?;
-    ensure!(from.is_file(), "clip introuvable : {old}");
+    ensure!(from.is_file(), "Clip introuvable");
     let new = new_name(input)?;
     let to = clip_path(dir, &new)?;
     // `fs::rename` remplace une destination existante sous Windows. Seul cas permis :
     // la destination est ce même fichier (changement de casse, que NTFS ignore).
     if to.exists() && !same_file(&from, &to)? {
-        bail!("un clip s'appelle déjà {new}");
+        bail!("Nom déjà pris");
     }
-    std::fs::rename(&from, &to)
-        .with_context(|| format!("renommage de {old} (clip en cours de lecture ?)"))?;
+    std::fs::rename(&from, &to).map_err(|e| {
+        // 32 = ERROR_SHARING_VIOLATION : le lecteur de la page tient encore le fichier.
+        let message = if e.raw_os_error() == Some(32) {
+            "Clip en cours d'utilisation"
+        } else {
+            "Renommage impossible"
+        };
+        anyhow::Error::new(e)
+            .context(format!("renommage de {old}"))
+            .context(message)
+    })?;
     Ok(new)
 }
 
@@ -280,6 +360,10 @@ mod tests {
         assert!(mvhd_duration(body(&mvhd_v0(0, 100))).is_err());
     }
 
+    fn file_duration(path: &Path) -> Result<f64> {
+        file_info(path).map(|(duration, _)| duration)
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("clipper-lib-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -300,7 +384,7 @@ mod tests {
             moov(&[bx(b"udta", &[1, 2, 3]), mvhd_v0(1000, 12_500)]),
         ]
         .concat();
-        let no_mvhd = [ftyp, moov(&[bx(b"udta", &[])])].concat();
+        let no_mvhd = [ftyp.clone(), moov(&[bx(b"udta", &[])])].concat();
         std::fs::write(dir.join("no_mvhd.mp4"), no_mvhd).unwrap();
         assert!(file_duration(&dir.join("no_mvhd.mp4")).is_err());
         std::fs::write(dir.join("fast.mp4"), fast).unwrap();
@@ -309,6 +393,18 @@ mod tests {
         assert_eq!(file_duration(&dir.join("slow.mp4")).unwrap(), 12.5);
         std::fs::write(dir.join("broken.mp4"), b"pas un mp4").unwrap();
         assert!(file_duration(&dir.join("broken.mp4")).is_err());
+        let video = trak(b"vide", 1080, 15_360, 15_360 * 31, 930);
+        let full = [ftyp, moov(&[mvhd_v0(1000, 31_000), video])].concat();
+        std::fs::write(dir.join("full.mp4"), full).unwrap();
+        let (duration, video) = file_info(&dir.join("full.mp4")).unwrap();
+        assert_eq!(duration, 31.0);
+        assert_eq!(
+            video,
+            Some(Video {
+                height: 1080,
+                fps: 30
+            })
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -356,13 +452,81 @@ mod tests {
             modified_ms: 1_760_000_000_000,
             size: 18_400_000,
             duration: Some(30.62),
+            video: Some(Video {
+                height: 720,
+                fps: 60,
+            }),
         };
-        assert_eq!(clip.line(), "clip.mp4\t1760000000000\t18400000\t30.62");
+        assert_eq!(
+            clip.line(),
+            "clip.mp4\t1760000000000\t18400000\t30.62\t720\t60"
+        );
         let unknown = ClipInfo {
             duration: None,
+            video: None,
             ..clip
         };
-        assert_eq!(unknown.line(), "clip.mp4\t1760000000000\t18400000\t");
+        assert_eq!(unknown.line(), "clip.mp4\t1760000000000\t18400000\t\t\t");
+    }
+
+    /// Piste minimale : tkhd (hauteur en 16.16 à la fin), mdia/mdhd, hdlr, minf/stbl/stsz.
+    fn trak(handler: &[u8; 4], height: u32, timescale: u32, duration: u32, count: u32) -> Vec<u8> {
+        let mut tkhd = vec![0u8; 76];
+        tkhd.extend_from_slice(&(1720u32 << 16).to_be_bytes());
+        tkhd.extend_from_slice(&(height << 16).to_be_bytes());
+        let mut mdhd = vec![0u8; 12];
+        mdhd.extend_from_slice(&timescale.to_be_bytes());
+        mdhd.extend_from_slice(&duration.to_be_bytes());
+        mdhd.extend_from_slice(&[0; 4]);
+        let mut hdlr = vec![0u8; 8];
+        hdlr.extend_from_slice(handler);
+        hdlr.extend_from_slice(&[0; 13]);
+        let mut stsz = vec![0u8; 8];
+        stsz.extend_from_slice(&count.to_be_bytes());
+        let stbl = bx(b"stbl", &bx(b"stsz", &stsz));
+        let mdia = [bx(b"mdhd", &mdhd), bx(b"hdlr", &hdlr), bx(b"minf", &stbl)].concat();
+        bx(b"trak", &[bx(b"tkhd", &tkhd), bx(b"mdia", &mdia)].concat())
+    }
+
+    /// Piste vidéo lue dans un fichier fait de `traks` (après un mvhd de 30 s).
+    fn video_of(name: &str, traks: &[Vec<u8>]) -> Option<Video> {
+        let dir = temp_dir(name);
+        let mut children = vec![mvhd_v0(1000, 30_000)];
+        children.extend_from_slice(traks);
+        let file = [bx(b"ftyp", b"isom"), moov(&children)].concat();
+        std::fs::write(dir.join("clip.mp4"), file).unwrap();
+        let (duration, video) = file_info(&dir.join("clip.mp4")).unwrap();
+        assert_eq!(duration, 30.0);
+        std::fs::remove_dir_all(&dir).unwrap();
+        video
+    }
+
+    #[test]
+    fn reads_height_and_fps_of_the_video_track() {
+        let sound = trak(b"soun", 0, 48_000, 48_000 * 30, 1406);
+        let video = trak(b"vide", 720, 15_360, 15_360 * 30, 1800);
+        assert_eq!(
+            video_of("tracks", &[sound, video]),
+            Some(Video {
+                height: 720,
+                fps: 60
+            })
+        );
+        // 29,97 i/s s'affiche 30.
+        let ntsc = trak(b"vide", 1440, 30_000, 30_000 * 30, 899);
+        assert_eq!(video_of("ntsc", &[ntsc]).map(|v| v.fps), Some(30));
+    }
+
+    #[test]
+    fn no_or_broken_video_track_is_none() {
+        let sound = trak(b"soun", 0, 48_000, 48_000, 47);
+        assert_eq!(video_of("sound", &[sound]), None);
+        let empty = trak(b"vide", 720, 15_360, 0, 1800);
+        assert_eq!(video_of("empty", &[empty]), None);
+        let no_frames = trak(b"vide", 720, 15_360, 15_360 * 30, 0);
+        assert_eq!(video_of("no_frames", &[no_frames]), None);
+        let truncated = bx(b"trak", &bx(b"tkhd", &[0; 4]));
+        assert_eq!(video_of("truncated", &[truncated]), None);
     }
 
     #[test]

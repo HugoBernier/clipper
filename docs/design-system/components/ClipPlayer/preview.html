@@ -105,6 +105,46 @@ document.addEventListener('keydown', function (e) {
   if (row && e.key === 'Delete') show('delete');
   if (row && e.key === 'F2') show('rename');
 });
+// Dropdown : liste dessinée par le design system (pas celle du système).
+// refocus : rendre le focus au bouton (clavier, choix), jamais après un clic ailleurs.
+function dropdownOpen(dd, open, refocus) {
+  var button = dd.querySelector('.cl-dropdown__button'), menu = dd.querySelector('.cl-dropdown__menu');
+  button.setAttribute('aria-expanded', String(open));
+  menu.hidden = !open;
+  $$('.cl-dropdown__option', menu).forEach(function (o) { o.classList.toggle('is-active', open && o.getAttribute('aria-selected') === 'true'); });
+  if (!open && refocus !== false) button.focus();
+}
+function dropdownPick(dd, option) {
+  $$('.cl-dropdown__option', dd).forEach(function (o) { o.setAttribute('aria-selected', String(o === option)); });
+  dd.querySelector('.cl-dropdown__value').textContent = option.querySelector('span').textContent;
+  dropdownOpen(dd, false);
+}
+document.addEventListener('click', function (e) {
+  var dd = e.target.closest('.cl-dropdown');
+  $$('.cl-dropdown').forEach(function (o) { if (o !== dd && !o.querySelector('.cl-dropdown__menu').hidden) dropdownOpen(o, false, false); });
+  if (!dd) return;
+  var option = e.target.closest('.cl-dropdown__option');
+  if (option) return dropdownPick(dd, option);
+  if (e.target.closest('.cl-dropdown__button')) dropdownOpen(dd, dd.querySelector('.cl-dropdown__menu').hidden);
+});
+document.addEventListener('keydown', function (e) {
+  var dd = e.target.closest && e.target.closest('.cl-dropdown'); if (!dd) return;
+  var menu = dd.querySelector('.cl-dropdown__menu'), options = $$('.cl-dropdown__option', menu);
+  var active = options.findIndex(function (o) { return o.classList.contains('is-active'); });
+  if (menu.hidden) {
+    if (['ArrowDown', 'ArrowUp', 'Enter', ' '].indexOf(e.key) >= 0) { e.preventDefault(); dropdownOpen(dd, true); }
+    return;
+  }
+  if (e.key === 'Escape') { e.preventDefault(); return dropdownOpen(dd, false); }
+  if (e.key === 'Tab') return dropdownOpen(dd, false, false);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    var next = Math.max(0, Math.min(options.length - 1, active + (e.key === 'ArrowDown' ? 1 : -1)));
+    options.forEach(function (o, i) { o.classList.toggle('is-active', i === next); });
+    options[next].scrollIntoView({ block: 'nearest' });
+  }
+  if ((e.key === 'Enter' || e.key === ' ') && active >= 0) { e.preventDefault(); dropdownPick(dd, options[active]); }
+});
 document.addEventListener('input', function (e) {
   if (e.target.hasAttribute('data-duration')) $$('[data-seconds]').forEach(function (n) { n.textContent = e.target.value; });
 });

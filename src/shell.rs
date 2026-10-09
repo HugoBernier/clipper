@@ -1,5 +1,6 @@
 //! Actions de Windows sur un clip, comme dans l'Explorateur : copier, glisser, mettre à
-//! la corbeille, montrer dans son dossier. À appeler sur le thread principal (STA).
+//! la corbeille, montrer dans son dossier ; et ouvrir le dossier des clips. À appeler
+//! sur le thread principal (STA).
 
 use std::path::Path;
 
@@ -97,6 +98,16 @@ pub fn reveal(path: &Path) -> Result<()> {
         ILFree(Some(pidl));
         result.context("SHOpenFolderAndSelectItems")
     }
+}
+
+/// Ouvre le dossier des clips dans l'Explorateur (créé s'il n'existe pas encore).
+pub fn open_folder(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("création de {}", dir.display()))?;
+    std::process::Command::new("explorer")
+        .arg(dir)
+        .spawn()
+        .context("lancement de l'Explorateur")?;
+    Ok(())
 }
 
 fn shell_item(path: &Path) -> Result<IShellItem> {
