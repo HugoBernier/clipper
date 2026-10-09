@@ -93,7 +93,16 @@
     const [kind, ...lines] = e.data.split('\n');
     if (kind === 'clips') return showClips(lines.filter(Boolean));
     if (kind === 'copied') return status(`Copié : ${lines[0]}. Ctrl+V dans Discord pour l'envoyer.`);
-    if (kind === 'error') return status(lines.join(' '), true);
+    if (kind === 'renamed') {
+      reselect = lines[0];
+      renaming = null;
+      return;
+    }
+    if (kind === 'error') {
+      if (renaming) reselect = renaming;
+      renaming = null;
+      return status(lines.join(' '), true);
+    }
     if (kind !== 'state') return;
     const state = Object.fromEntries(lines.map(line => {
       const i = line.indexOf('=');
@@ -163,8 +172,10 @@
   // Bibliothèque.
   const player = $('player');
   let current = null;
-  // Après un renommage, le clip à resélectionner : son nouveau nom, sinon l'ancien.
-  let renamed = null;
+  // Renommage en cours (ancien nom), puis clip à resélectionner à la liste suivante :
+  // le nouveau nom annoncé par Rust, ou l'ancien si le renommage a échoué.
+  let renaming = null;
+  let reselect = null;
 
   function status(text, error = false) {
     $('clip-status').textContent = text;
@@ -210,11 +221,10 @@
     if (!lines.length) list.textContent = 'Aucun clip pour l\'instant.';
     list.scrollTop = scroll;
     if (!found) unload();
-    if (renamed) {
-      const names = [...list.children].map(r => r.dataset.name);
-      const pick = [renamed.to, renamed.from].find(n => names.includes(n));
-      renamed = null;
-      if (pick) select(pick, false);
+    if (reselect) {
+      const pick = reselect;
+      reselect = null;
+      if ([...list.children].some(r => r.dataset.name === pick)) select(pick, false);
     }
     highlight();
   }
@@ -255,9 +265,7 @@
     if (!name) return;
     const old = current;
     unload();
-    // Même règle que Rust (`library::new_name`) : espaces retirés, `.mp4` ajouté.
-    const to = /\.mp4$/i.test(name.trim()) ? name.trim() : `${name.trim()}.mp4`;
-    renamed = { from: old, to };
+    renaming = old;
     send('rename', `${old}\t${name}`);
   });
   $('delete').addEventListener('click', () => {

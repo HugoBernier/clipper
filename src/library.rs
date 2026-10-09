@@ -206,7 +206,7 @@ pub fn rename(dir: &Path, old: &str, input: &str) -> Result<String> {
     let to = clip_path(dir, &new)?;
     // `fs::rename` remplace une destination existante sous Windows. Seul cas permis :
     // la destination est ce même fichier (changement de casse, que NTFS ignore).
-    if to.exists() && !same_file(&from, &to) {
+    if to.exists() && !same_file(&from, &to)? {
         bail!("un clip s'appelle déjà {new}");
     }
     std::fs::rename(&from, &to)
@@ -216,11 +216,10 @@ pub fn rename(dir: &Path, old: &str, input: &str) -> Result<String> {
 
 /// Même fichier sur disque, quelle que soit la casse demandée : le chemin réel est
 /// comparé, pas les noms (le repli de casse de NTFS n'est pas celui de Rust).
-fn same_file(a: &Path, b: &Path) -> bool {
-    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    }
+fn same_file(a: &Path, b: &Path) -> Result<bool> {
+    let real =
+        |p: &Path| std::fs::canonicalize(p).with_context(|| format!("chemin de {}", p.display()));
+    Ok(real(a)? == real(b)?)
 }
 
 #[cfg(test)]
@@ -415,7 +414,8 @@ mod tests {
         // changer la casse est permis.
         std::fs::write(dir.join("A.mp4"), b"autre").unwrap();
         std::fs::write(dir.join("a.mp4"), b"a").unwrap();
-        let distinct = !same_file(&dir.join("A.mp4"), &dir.join("a.mp4"));
+        // Sensible à la casse si la seconde écriture n'a pas remplacé la première.
+        let distinct = std::fs::read(dir.join("A.mp4")).unwrap() == b"autre";
         let result = rename(&dir, "a.mp4", "A");
         if distinct {
             assert!(result.is_err());

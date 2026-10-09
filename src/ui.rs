@@ -65,8 +65,9 @@ thread_local! {
     static WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
     static REQUESTS: RefCell<VecDeque<String>> = const { RefCell::new(VecDeque::new()) };
     static CLIPS_DIR: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
-    /// Seules nos propres navigations (`load_page`) passent la garde de navigation.
-    static NAVIGATION_ALLOWED: Cell<bool> = const { Cell::new(false) };
+    /// Nos navigations (`load_page`) pas encore vues par la garde de navigation : seules
+    /// elles passent.
+    static OWN_NAVIGATIONS: Cell<u32> = const { Cell::new(0) };
 }
 
 /// Ouvre la fenêtre, ou la ramène au premier plan si elle l'est déjà.
@@ -172,11 +173,11 @@ pub fn set_clips_dir(dir: &Path) {
 }
 
 fn load_page(webview: &ICoreWebView2) -> Result<()> {
-    NAVIGATION_ALLOWED.set(true);
+    OWN_NAVIGATIONS.set(OWN_NAVIGATIONS.get() + 1);
     // SAFETY: vue vivante, sur ce thread ; chaîne valide pendant l'appel.
     unsafe { webview.NavigateToString(&HSTRING::from(PAGE)) }
         .context("NavigateToString")
-        .inspect_err(|_| NAVIGATION_ALLOWED.set(false))
+        .inspect_err(|_| OWN_NAVIGATIONS.set(OWN_NAVIGATIONS.get().saturating_sub(1)))
 }
 
 fn map_clips(webview: &ICoreWebView2) -> Result<()> {
@@ -310,7 +311,9 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
     // Un fichier déposé sur la fenêtre, ou un lien, ferait naviguer la vue : la page
     // remplaçante pourrait alors envoyer des commandes. Seule notre page est chargée.
     let guard = NavigationStartingEventHandler::create(Box::new(|_, args| {
-        if let Some(args) = args.filter(|_| !NAVIGATION_ALLOWED.replace(false)) {
+        let own = OWN_NAVIGATIONS.get();
+        OWN_NAVIGATIONS.set(own.saturating_sub(1));
+        if let Some(args) = args.filter(|_| own == 0) {
             // SAFETY: arguments valides pendant l'événement.
             unsafe { args.SetCancel(true) }?;
         }

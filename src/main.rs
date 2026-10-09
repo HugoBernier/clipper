@@ -34,6 +34,7 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
+use windows::Win32::UI::Shell::COPYENGINE_E_SHARING_VIOLATION_SRC;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONHAND,
     MB_OK, MESSAGEBOX_STYLE, MSG, PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage,
@@ -325,7 +326,12 @@ fn handle_library(command: &str, arg: &str) -> bool {
         "reveal" => clip(arg).and_then(|p| shell::reveal(&p)),
         "delete" => clip(arg).and_then(|p| retry_while_in_use(|| shell::recycle(owner, &p))),
         "rename" => match arg.split_once('\t') {
-            Some((old, new)) => retry_while_in_use(|| library::rename(&dir, old, new).map(|_| ())),
+            Some((old, new)) => {
+                let mut renamed = String::new();
+                retry_while_in_use(|| library::rename(&dir, old, new).map(|n| renamed = n))
+                    // La page resélectionne le clip sous son nouveau nom.
+                    .inspect(|()| ui::post(&format!("renamed\n{renamed}")))
+            }
             None => Err(anyhow!("renommage mal formé : {arg}")),
         },
         _ => Ok(()),
@@ -358,8 +364,6 @@ fn retry_while_in_use(mut action: impl FnMut() -> Result<()>) -> Result<()> {
 }
 
 fn file_in_use(e: &anyhow::Error) -> bool {
-    // Même erreur vue par IFileOperation (COPYENGINE_E_SHARING_VIOLATION_SRC).
-    const COPY_ENGINE_SHARING_VIOLATION: HRESULT = HRESULT(0x8027_0021_u32 as i32);
     let violation = ERROR_SHARING_VIOLATION.0;
     e.chain().any(|cause| {
         cause
@@ -370,7 +374,7 @@ fn file_in_use(e: &anyhow::Error) -> bool {
                 .downcast_ref::<windows::core::Error>()
                 .is_some_and(|w| {
                     w.code() == HRESULT::from_win32(violation)
-                        || w.code() == COPY_ENGINE_SHARING_VIOLATION
+                        || w.code() == COPYENGINE_E_SHARING_VIOLATION_SRC
                 })
     })
 }
@@ -463,8 +467,8 @@ impl App {
         // change, et la liste suit.
         if out_dir != self.out_dir {
             tray::set_clips_dir(out_dir.clone());
+            // La page ouverte se recharge et redemande la liste.
             ui::set_clips_dir(&out_dir);
-            post_to_main(WM_CLIPS_CHANGED);
             self.out_dir = out_dir;
         }
         if let Some(tray) = &self.tray {
