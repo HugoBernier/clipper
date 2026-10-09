@@ -33,7 +33,7 @@ Il faut Windows 10 ou 11 et une carte graphique AMD, NVIDIA ou Intel récente.
 - **Ce qui est écrit sur le disque :** vos clips (`Vidéos\Clipper`), les réglages (`clipper.toml`, à côté de l'exe) et un journal technique sans image ni son (`%LOCALAPPDATA%\clipper\clipper.log`).
 - **Désinstallation :** depuis *Applications installées*. Elle retire l'app, ses raccourcis et le démarrage auto ; vos clips restent.
 
-Signaler une faille : voir [SECURITY.md](SECURITY.md).
+Signaler une faille : voir [SECURITY.md](SECURITY.md). Signature des releases : voir [CODE_SIGNING.md](CODE_SIGNING.md).
 
 ## Comment c'est fait
 
@@ -80,3 +80,7 @@ cargo fmt
 - Apparence de l'interface : [`docs/design-system`](docs/design-system/README.md)
 
 Commits au format [Conventional Commits](https://www.conventionalcommits.org/fr/). [release-please](https://github.com/googleapis/release-please) en déduit la version et le [`CHANGELOG.md`](CHANGELOG.md) ; fusionner sa PR publie la release.
+
+## Licence
+
+[MIT](LICENSE).
