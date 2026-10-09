@@ -461,7 +461,11 @@ impl App {
             error!("réglage {key} : {e:#}");
             beep(false);
         }
-        ui::post(&self.state());
+        // L'état liste les micros (énumération de périphériques) : seulement si la
+        // fenêtre est là pour le lire.
+        if ui::current_hwnd().is_some() {
+            ui::post(&self.state());
+        }
     }
 
     /// Applique un réglage sans relancer Clipper, puis l'enregistre. Seul ce qui dépend

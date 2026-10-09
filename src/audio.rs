@@ -119,18 +119,20 @@ impl Microphone {
     }
 }
 
-/// Micros branchés : (identifiant Windows, nom affiché).
+/// Micros branchés : (identifiant Windows, nom affiché). Un micro illisible (pilote
+/// virtuel…) est sauté plutôt que de vider la liste.
 pub fn microphones() -> Result<Vec<(String, String)>> {
     let enumerator = wasapi::DeviceEnumerator::new().context("DeviceEnumerator")?;
     let devices = enumerator
         .get_device_collection(&wasapi::Direction::Capture)
         .context("liste des micros")?;
-    (0..devices.get_nbr_devices()?)
-        .map(|i| {
-            let device = devices.get_device_at_index(i)?;
-            Ok((device.get_id()?, device.get_friendlyname()?))
+    let count = devices.get_nbr_devices().context("nombre de micros")?;
+    Ok((0..count)
+        .filter_map(|i| {
+            let device = devices.get_device_at_index(i).ok()?;
+            Some((device.get_id().ok()?, device.get_friendlyname().ok()?))
         })
-        .collect()
+        .collect())
 }
 
 /// Démarre capture, mixage et encodage dans un thread dédié ; renvoie le format AAC
@@ -224,29 +226,36 @@ impl Source {
     }
 
     /// Le périphérique à capturer maintenant : la sortie par défaut de Windows, ou le
-    /// micro choisi (à défaut, celui de communication par défaut).
+    /// micro choisi s'il est branché, sinon celui de communication par défaut (comme
+    /// Discord ; on revient au micro choisi dès qu'il est rebranché).
     fn target(&self) -> Result<wasapi::Device> {
-        let enumerator = wasapi::DeviceEnumerator::new()?;
-        Ok(match self {
-            Source::System => enumerator.get_default_device(&wasapi::Direction::Render)?,
+        let enumerator = wasapi::DeviceEnumerator::new().context("DeviceEnumerator")?;
+        match self {
+            Source::System => enumerator
+                .get_default_device(&wasapi::Direction::Render)
+                .context("sortie par défaut"),
             Source::Microphone(mic) => {
                 let id = mic.device.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                if id.is_empty() {
-                    enumerator.get_default_device_for_role(
-                        &wasapi::Direction::Capture,
-                        &wasapi::Role::Communications,
-                    )?
-                } else {
-                    enumerator
-                        .get_device(&id)
-                        .context("micro choisi absent (débranché ?)")?
+                // Windows rend aussi un micro débranché : son état dit s'il est là.
+                let chosen = (!id.is_empty())
+                    .then(|| enumerator.get_device(&id).ok())
+                    .flatten()
+                    .filter(|d| matches!(d.get_state(), Ok(wasapi::DeviceState::Active)));
+                match chosen {
+                    Some(device) => Ok(device),
+                    None => enumerator
+                        .get_default_device_for_role(
+                            &wasapi::Direction::Capture,
+                            &wasapi::Role::Communications,
+                        )
+                        .context("micro de communication par défaut"),
                 }
             }
-        })
+        }
     }
 
-    /// Ouvre la capture ; renvoie aussi le nom et l'identifiant du périphérique.
-    fn open(&self) -> Result<(Capture, String, String)> {
+    /// Ouvre la capture ; renvoie aussi le nom du périphérique.
+    fn open(&self) -> Result<(Capture, String)> {
         let device = self.target()?;
         let mut client = device.get_iaudioclient()?;
         // autoconvert : le moteur audio livre directement du PCM 16 bits 48 kHz stéréo,
@@ -264,14 +273,14 @@ impl Source {
         )?;
         let reader = client.get_audiocaptureclient()?;
         client.start_stream()?;
-        let name = device.get_friendlyname()?;
+        let name = device.get_friendlyname().context("nom du périphérique")?;
         Ok((
             Capture {
                 _client: client,
                 reader,
+                device: device.get_id().context("identifiant du périphérique")?,
             },
             name,
-            device.get_id()?,
         ))
     }
 }
@@ -280,6 +289,8 @@ struct Capture {
     /// Gardé en vie : le relâcher arrête le flux.
     _client: wasapi::AudioClient,
     reader: wasapi::AudioCaptureClient,
+    /// Identifiant Windows du périphérique capturé.
+    device: String,
 }
 
 /// Une source et sa position : livre au mixeur un flux continu (silence quand rien
@@ -289,8 +300,6 @@ struct Input {
     index: usize,
     timeline: Timeline,
     capture: Option<Capture>,
-    /// Identifiant du périphérique ouvert.
-    device: String,
     retry_at: Instant,
     /// Prochaine vérification du périphérique voulu (sortie par défaut changée…).
     check_at: Instant,
@@ -304,7 +313,6 @@ impl Input {
             index,
             timeline: Timeline::new(origin),
             capture: None,
-            device: String::new(),
             retry_at: Instant::now(),
             check_at: Instant::now(),
             failing: false,
@@ -319,23 +327,25 @@ impl Input {
             self.failing = false;
         } else if self.capture.is_none() && Instant::now() >= self.retry_at {
             match self.source.open() {
-                Ok((capture, name, id)) => {
+                Ok((capture, name)) => {
                     info!("capture {} : {name}", self.source.name());
                     self.capture = Some(capture);
-                    self.device = id;
+                    self.check_at = Instant::now() + CHECK_DEVICE;
                     self.failing = false;
                 }
                 Err(e) => self.fail(&e),
             }
-        } else if self.capture.is_some() && Instant::now() >= self.check_at {
+        } else if let Some(capture) = &self.capture
+            && Instant::now() >= self.check_at
+        {
             // Windows ne coupe pas la capture quand la sortie par défaut change (casque
             // branché…) : sans ça, on continuerait d'enregistrer l'ancien périphérique.
             self.check_at = Instant::now() + CHECK_DEVICE;
             if self
                 .source
                 .target()
-                .and_then(|d| Ok(d.get_id()?))
-                .is_ok_and(|id| id != self.device)
+                .and_then(|d| d.get_id().context("identifiant du périphérique"))
+                .is_ok_and(|id| id != capture.device)
             {
                 info!("{} : autre périphérique, réouverture", self.source.name());
                 self.capture = None;

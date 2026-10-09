@@ -118,7 +118,9 @@
     const parts = (state.microphones ?? '').split('\t');
     for (let i = 0; i + 1 < parts.length; i += 2) mics.append(new Option(parts[i + 1], parts[i]));
     if (![...mics.options].some(o => o.value === state.microphone_device)) {
-      mics.append(new Option('Micro choisi (débranché)', state.microphone_device));
+      // Liste indisponible : on ne sait pas s'il est branché.
+      const label = state.microphones === undefined ? 'Micro choisi' : 'Micro choisi (débranché : micro par défaut)';
+      mics.append(new Option(label, state.microphone_device));
     }
     for (const el of form.elements) {
       if (!(el.name in state)) continue;
