@@ -1,12 +1,12 @@
-//! Icône dans la zone de notification : info-bulle et menu (dossier des clips,
-//! démarrage avec Windows, quitter).
+//! Icône dans la zone de notification : info-bulle, clic gauche pour ouvrir la fenêtre,
+//! menu (fenêtre, dossier des clips, micro, démarrage avec Windows, quitter).
 //!
 //! Une fenêtre cachée reçoit les messages de l'icône ; elle n'a pas de style
 //! visible, donc ni fenêtre à l'écran ni bouton dans la barre des tâches.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 use anyhow::{Context, Result, bail};
 use log::{error, info, warn};
@@ -19,26 +19,24 @@ use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_BINARY, RRF_RT_REG_BINARY, RegDeleteKeyValueW, RegGetValueW,
     RegSetKeyValueW,
 };
-use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
-    FOLDERID_Startup, IShellLinkW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NOTIFYICONDATAW, Shell_NotifyIconW, ShellLink,
+    FOLDERID_Startup, IShellLinkW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, Interface, PCWSTR, w};
 
-use crate::config::PRESETS;
-use crate::save;
+use crate::{save, ui};
 
 /// Message envoyé par l'icône à la fenêtre cachée.
 const WM_TRAY: u32 = WM_APP + 1;
-/// Envoyé au thread principal quand un préréglage de qualité est choisi (wParam = index).
-pub const WM_QUALITY: u32 = WM_APP + 2;
-/// Identifiants de menu des préréglages : `ID_QUALITY + index`.
-const ID_QUALITY: usize = 100;
+/// Envoyé à la fenêtre principale pour couper ou réactiver le micro.
+pub const WM_MICROPHONE: u32 = WM_APP + 2;
 const ID_OPEN: usize = 1;
 const ID_STARTUP: usize = 2;
 const ID_QUIT: usize = 3;
+const ID_MICROPHONE: usize = 4;
+const ID_WINDOW: usize = 5;
 /// Démarrage avec Windows : raccourci dans le dossier Démarrage (`shell:startup`), la
 /// méthode documentée par Microsoft pour les applications de bureau (Telegram, Ollama
 /// font de même).
@@ -49,15 +47,16 @@ const APPROVED_KEY: PCWSTR =
 const APPROVED_VALUE: PCWSTR = w!("Clipper.lnk");
 /// 1er octet pair = activé (02), impair = désactivé (03) ; le reste est un horodatage.
 const APPROVED_ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-/// Icône de l'application (assets/clipper.rc), aussi utilisée pour la notification.
-const ICON_RESOURCE: u16 = 1;
+/// Icône de l'application (assets/clipper.rc), aussi utilisée pour la notification et
+/// la fenêtre.
+pub const ICON_RESOURCE: u16 = 1;
 
 /// État lu par la procédure de fenêtre (fonction `extern "system"` sans contexte).
-static CLIPS_DIR: OnceLock<PathBuf> = OnceLock::new();
-static TOOLTIP: OnceLock<String> = OnceLock::new();
+static CLIPS_DIR: Mutex<PathBuf> = Mutex::new(PathBuf::new());
+static TOOLTIP: Mutex<String> = Mutex::new(String::new());
 static ICON: AtomicUsize = AtomicUsize::new(0);
-/// Préréglage coché dans le menu ; `usize::MAX` : config personnalisée.
-static PRESET: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Case « Micro » du menu.
+static MICROPHONE: AtomicBool = AtomicBool::new(false);
 /// Diffusé par l'Explorateur quand il redémarre : il faut remettre l'icône.
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
@@ -69,8 +68,8 @@ pub struct Tray {
 impl Tray {
     /// À créer sur le thread qui fait tourner la boucle de messages.
     pub fn new(clips_dir: PathBuf, tooltip: String) -> Result<Self> {
-        let _ = CLIPS_DIR.set(clips_dir);
-        let _ = TOOLTIP.set(tooltip);
+        set_clips_dir(clips_dir);
+        *TOOLTIP.lock().unwrap_or_else(|e| e.into_inner()) = tooltip;
         // SAFETY: création classique d'une classe et d'une fenêtre Win32 cachée.
         unsafe {
             let instance = GetModuleHandleW(None).context("GetModuleHandleW")?;
@@ -105,12 +104,21 @@ impl Tray {
             ICON.store(load_icon(instance.into())?.0 as usize, Ordering::Relaxed);
             // Zone de notification pas encore prête : la fenêtre reste, et l'icône sera
             // ajoutée au message « TaskbarCreated ».
-            if let Err(e) = add_icon(hwnd) {
+            if let Err(e) = notify(hwnd, NIM_ADD) {
                 warn!(
                     "icône pas encore ajoutée ({e:#}) ; nouvel essai quand l'Explorateur sera prêt"
                 );
             }
             Ok(Self { hwnd })
+        }
+    }
+}
+
+impl Tray {
+    pub fn set_tooltip(&self, tooltip: &str) {
+        *TOOLTIP.lock().unwrap_or_else(|e| e.into_inner()) = tooltip.into();
+        if let Err(e) = notify(self.hwnd, NIM_MODIFY) {
+            warn!("info-bulle non mise à jour : {e:#}");
         }
     }
 }
@@ -132,11 +140,16 @@ impl Drop for Tray {
     }
 }
 
-pub fn set_preset(preset: Option<usize>) {
-    PRESET.store(preset.unwrap_or(usize::MAX), Ordering::Relaxed);
+pub fn set_microphone(enabled: bool) {
+    MICROPHONE.store(enabled, Ordering::Relaxed);
 }
 
-fn add_icon(hwnd: HWND) -> Result<()> {
+pub fn set_clips_dir(dir: PathBuf) {
+    *CLIPS_DIR.lock().unwrap_or_else(|e| e.into_inner()) = dir;
+}
+
+/// Ajoute l'icône (`NIM_ADD`) ou met à jour son info-bulle (`NIM_MODIFY`).
+fn notify(hwnd: HWND, action: NOTIFY_ICON_MESSAGE) -> Result<()> {
     let mut data = NOTIFYICONDATAW {
         cbSize: size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,
@@ -147,14 +160,14 @@ fn add_icon(hwnd: HWND) -> Result<()> {
         ..Default::default()
     };
     let tip: Vec<u16> = TOOLTIP
-        .get()
-        .map_or("Clipper", String::as_str)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
         .encode_utf16()
         .collect();
     let n = tip.len().min(data.szTip.len() - 1);
     data.szTip[..n].copy_from_slice(&tip[..n]);
     // SAFETY: structure complète, fenêtre valide.
-    if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
+    if !unsafe { Shell_NotifyIconW(action, &data) }.as_bool() {
         bail!("Shell_NotifyIconW");
     }
     Ok(())
@@ -168,16 +181,18 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     if msg == WM_TRAY {
         // Sans NIM_SETVERSION, lParam porte directement le message souris.
-        let mouse = lparam.0 as u32;
-        if (mouse == WM_RBUTTONUP || mouse == WM_LBUTTONUP)
-            && let Err(e) = show_menu(hwnd)
-        {
-            error!("menu de l'icône : {e:#}");
+        let result = match lparam.0 as u32 {
+            WM_LBUTTONUP => ui::open(),
+            WM_RBUTTONUP => show_menu(hwnd),
+            _ => Ok(()),
+        };
+        if let Err(e) = result {
+            error!("icône : {e:#}");
         }
         return LRESULT(0);
     }
     if msg == TASKBAR_CREATED.load(Ordering::Relaxed) {
-        if let Err(e) = add_icon(hwnd) {
+        if let Err(e) = notify(hwnd, NIM_ADD) {
             error!("icône non restaurée après redémarrage de l'Explorateur : {e:#}");
         }
         return LRESULT(0);
@@ -192,28 +207,17 @@ fn show_menu(hwnd: HWND) -> Result<()> {
     // WM_NULL après sont requis pour que le menu se ferme en cliquant ailleurs.
     let choice = unsafe {
         let menu = CreatePopupMenu()?;
+        AppendMenuW(menu, MF_STRING, ID_WINDOW, w!("Ouvrir Clipper")).context("AppendMenuW")?;
         AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Ouvrir le dossier des clips"))?;
-        let quality = CreatePopupMenu()?;
-        let current = PRESET.load(Ordering::Relaxed);
-        for (i, preset) in PRESETS.iter().enumerate() {
-            let check = if i == current {
-                MF_CHECKED
-            } else {
-                MF_UNCHECKED
-            };
-            AppendMenuW(
-                quality,
-                MF_STRING | check,
-                ID_QUALITY + i,
-                &HSTRING::from(preset.name),
-            )?;
-        }
-        // Le sous-menu est détruit avec le menu parent.
-        AppendMenuW(menu, MF_POPUP, quality.0 as usize, w!("Qualité"))?;
-        let check = if startup { MF_CHECKED } else { MF_UNCHECKED };
         AppendMenuW(
             menu,
-            MF_STRING | check,
+            MF_STRING | checked(MICROPHONE.load(Ordering::Relaxed)),
+            ID_MICROPHONE,
+            w!("Micro"),
+        )?;
+        AppendMenuW(
+            menu,
+            MF_STRING | checked(startup),
             ID_STARTUP,
             w!("Démarrer avec Windows"),
         )?;
@@ -236,32 +240,18 @@ fn show_menu(hwnd: HWND) -> Result<()> {
         choice.0 as usize
     };
     match choice {
-        id if (ID_QUALITY..ID_QUALITY + PRESETS.len()).contains(&id) => {
-            let preset = id - ID_QUALITY;
-            if preset != PRESET.load(Ordering::Relaxed) {
-                // Le pipeline vidéo appartient au thread principal : on lui délègue.
-                // SAFETY: message posté au thread courant (celui de la boucle principale).
-                unsafe {
-                    PostThreadMessageW(
-                        GetCurrentThreadId(),
-                        WM_QUALITY,
-                        WPARAM(preset),
-                        LPARAM(0),
-                    )?;
-                }
-            }
-        }
+        // La config appartient à l'état principal : on lui délègue.
+        ID_MICROPHONE => crate::post_to_main(WM_MICROPHONE),
+        ID_WINDOW => ui::open()?,
         ID_OPEN => {
-            let dir = CLIPS_DIR.get().context("dossier des clips inconnu")?;
-            std::fs::create_dir_all(dir)?;
-            std::process::Command::new("explorer").arg(dir).spawn()?;
+            let dir = CLIPS_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            std::fs::create_dir_all(&dir)?;
+            std::process::Command::new("explorer").arg(&dir).spawn()?;
         }
         ID_STARTUP => {
-            set_startup(!startup)?;
-            info!(
-                "démarrage avec Windows : {}",
-                if startup { "désactivé" } else { "activé" }
-            );
+            let result = set_startup(!startup);
+            ui::refresh();
+            result?;
         }
         // SAFETY: termine la boucle de messages du thread principal.
         ID_QUIT => unsafe { PostQuitMessage(0) },
@@ -270,12 +260,16 @@ fn show_menu(hwnd: HWND) -> Result<()> {
     Ok(())
 }
 
+fn checked(on: bool) -> MENU_ITEM_FLAGS {
+    if on { MF_CHECKED } else { MF_UNCHECKED }
+}
+
 fn shortcut_path() -> Result<PathBuf> {
     Ok(save::known_folder(&FOLDERID_Startup)?.join(SHORTCUT))
 }
 
 /// Coché si le raccourci existe et n'est pas désactivé dans le Gestionnaire des tâches.
-fn startup_enabled() -> bool {
+pub fn startup_enabled() -> bool {
     let mut state = [0u8; 12];
     let mut len = state.len() as u32;
     // SAFETY: lecture d'une valeur binaire HKCU dans un tampon de la taille annoncée.
@@ -298,7 +292,7 @@ fn is_disabled(state: Option<&[u8]>) -> bool {
     state.and_then(<[u8]>::first).is_some_and(|b| b & 1 == 1)
 }
 
-fn set_startup(enabled: bool) -> Result<()> {
+pub fn set_startup(enabled: bool) -> Result<()> {
     let link = shortcut_path()?;
     if enabled {
         create_shortcut(&link, &std::env::current_exe()?)?;
@@ -323,6 +317,10 @@ fn set_startup(enabled: bool) -> Result<()> {
         // SAFETY: suppression d'une valeur HKCU ; son absence n'est pas une erreur.
         let _ = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, APPROVED_KEY, APPROVED_VALUE) };
     }
+    info!(
+        "démarrage avec Windows : {}",
+        if enabled { "activé" } else { "désactivé" }
+    );
     Ok(())
 }
 

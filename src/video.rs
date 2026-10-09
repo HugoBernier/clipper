@@ -32,6 +32,7 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
 use windows::core::{IInspectable, Interface, Ref};
 
+use crate::config::{self, Quality};
 use crate::mf::{self, SEC, VideoFormat};
 use crate::ring::{Packet, Ring};
 
@@ -69,12 +70,12 @@ impl Video {
 }
 
 /// Démarre la capture et l'encodage dans un thread dédié. Renvoie une fois
-/// l'initialisation réussie. Si l'encodage échoue plus tard, le thread `main_thread`
-/// reçoit WM_QUIT.
+/// l'initialisation réussie, ou son erreur. Si l'encodage échoue plus tard, le thread
+/// `main_thread` reçoit WM_QUIT.
 pub fn spawn(
     height: u32,
     fps: u32,
-    bitrate: u32,
+    quality: Quality,
     ring: Arc<Mutex<Ring>>,
     main_thread: u32,
 ) -> Result<Video> {
@@ -84,12 +85,18 @@ pub fn spawn(
     let thread = std::thread::Builder::new()
         .name("video".into())
         .spawn(move || {
-            if let Err(e) = run(height, fps, bitrate, &ring, &thread_stop, &ready_tx) {
+            let mut ready = Some(ready_tx);
+            if let Err(e) = run(height, fps, quality, &ring, &thread_stop, &mut ready) {
                 error!("vidéo arrêtée : {e:#}");
-                let _ = ready_tx.send(Err(anyhow!("{e:#}")));
-                // SAFETY: simple envoi de message au thread principal.
-                unsafe {
-                    let _ = PostThreadMessageW(main_thread, WM_QUIT, WPARAM(1), LPARAM(0));
+                match ready {
+                    // Échec à l'init : `spawn` le renvoie, l'appelant décide.
+                    Some(ready) => {
+                        let _ = ready.send(Err(anyhow!("{e:#}")));
+                    }
+                    // SAFETY: simple envoi de message au thread principal.
+                    None => unsafe {
+                        let _ = PostThreadMessageW(main_thread, WM_QUIT, WPARAM(1), LPARAM(0));
+                    },
                 }
             }
         })?;
@@ -106,10 +113,10 @@ pub fn spawn(
 fn run(
     height: u32,
     fps: u32,
-    bitrate: u32,
+    quality: Quality,
     ring: &Mutex<Ring>,
     stop: &AtomicBool,
-    ready: &Sender<Result<VideoFormat>>,
+    ready: &mut Option<Sender<Result<VideoFormat>>>,
 ) -> Result<()> {
     mf::startup()?;
     let (device, context) = create_device()?;
@@ -117,6 +124,7 @@ fn run(
     let src = item.Size()?;
     // Hauteur fixe, largeur au ratio de l'écran (3440x1440 → 1720x720), paire pour NV12.
     let width = (src.Width as u32 * height / src.Height as u32) & !1;
+    let bitrate = config::video_bitrate(quality, width, height, fps);
     let format = VideoFormat {
         width,
         height,
@@ -133,7 +141,9 @@ fn run(
 
     let latest: Latest = Arc::new(Mutex::new(SendBox(None)));
     let _capture = start_capture(&device, &context, &item, &format, latest.clone())?;
-    let _ = ready.send(Ok(format));
+    if let Some(ready) = ready.take() {
+        let _ = ready.send(Ok(format));
+    }
     let result = encode_loop(&encoder, &format, &latest, ring, stop);
     shutdown_encoder(&encoder, &activate);
     result

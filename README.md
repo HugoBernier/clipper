@@ -3,9 +3,11 @@
 Replay buffer minimal pour Windows : Clipper garde en mémoire les 30 dernières secondes de l'écran et du son, et les enregistre dans un MP4 prêt pour Discord quand on appuie sur un raccourci.
 
 - Encodage matériel H.264 (GPU), AAC pour le son du PC et le micro, synchronisés sur la même horloge.
-- Clip sous la limite d'upload de Discord (19 Mo par défaut).
+- Durée, résolution, fps et qualité au choix, avec la taille estimée d'un clip ; par défaut, ~19 Mo pour 30 s.
 - Sans injection ni hook clavier : compatible avec les anti-cheats (EAC, BattlEye).
-- Icône près de l'horloge, démarrage avec Windows, installeur sans droits admin.
+- Fenêtre de réglages, icône près de l'horloge, démarrage avec Windows, installeur sans droits admin.
+
+La fenêtre utilise WebView2, le moteur d'Edge fourni avec Windows 11 (aucun navigateur embarqué).
 
 ## Installation
 
@@ -18,24 +20,26 @@ Prérequis : Windows 10 1903 ou plus récent, GPU avec encodeur H.264 matériel 
 | Action | Comment |
 |---|---|
 | Enregistrer les 30 dernières secondes | **Alt+F10** (un son confirme) |
+| Régler Clipper | Clic sur l'icône (ou clic droit → *Ouvrir Clipper*) : appliqué tout de suite, sans relancer |
 | Retrouver les clips | `Vidéos\Clipper`, ou clic droit sur l'icône → *Ouvrir le dossier des clips* |
-| Changer la qualité | Clic droit sur l'icône → *Qualité* (720p 60 i/s, 1080p 30 i/s, 1440p 60 i/s pour Nitro) |
+| Couper le micro | Clic droit sur l'icône → *Micro* |
 | Démarrer avec Windows | Clic droit sur l'icône → *Démarrer avec Windows* |
 | Quitter | Clic droit sur l'icône → *Quitter* |
 
 ## Réglages
 
-Fichier `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), créé au premier lancement. La qualité se change depuis le menu de l'icône ; pour les autres clés, relancer Clipper après une modification.
+Fichier `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), créé au premier lancement et réécrit par la fenêtre de réglages. Après une modification à la main, relancer Clipper.
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `clip_seconds` | `30` | Durée d'un clip, en secondes |
-| `height` | `720` | Hauteur de sortie ; la largeur suit le ratio de l'écran |
-| `fps` | `60` | Images par seconde |
-| `target_mb` | `19.0` | Taille maximale d'un clip, en Mo |
+| `clip_seconds` | `30` | Durée d'un clip, en secondes (10 à 300) |
+| `height` | `720` | Hauteur de sortie (720, 1080, 1440) ; la largeur suit le ratio de l'écran |
+| `fps` | `60` | Images par seconde (30, 60, 120, 144) |
+| `quality` | `"medium"` | `low`, `medium`, `high` ou `very_high` : fixe le débit ; la taille suit la durée |
 | `hotkey` | `"Alt+F10"` | Raccourci (ex. `"Ctrl+Shift+S"`, touches F1–F24, A–Z, 0–9) |
 | `output_dir` | `"Clipper"` | Dossier des clips, relatif au dossier Vidéos ou absolu |
 | `microphone` | `true` | Mixer le micro de communication au son du PC |
+| `microphone_volume` | `100` | Volume du micro dans le clip, en % (0 à 200) |
 
 Log : `%LOCALAPPDATA%\clipper\clipper.log`.
 
