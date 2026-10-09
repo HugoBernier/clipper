@@ -4,13 +4,15 @@
 
 Au raccourci, un MP4 des **30 dernières secondes** (image + son du jeu), qui s'envoie tel quel sur Discord. Rien n'est affiché, rien de tiers n'est installé.
 
+Depuis l'itération 9 : la durée, la résolution, les fps et la qualité sont des choix de l'utilisateur. L'app sert les clips, elle ne raisonne plus en limites Discord ; elle affiche la taille estimée et laisse l'utilisateur décider. Une fenêtre (ouverte depuis l'icône) sert à régler Clipper et à revoir et partager les clips. En jeu, rien ne change : pas de fenêtre, la même empreinte.
+
 ## Contraintes
 
 | Contrainte | Valeur |
 |---|---|
 | OS | Windows 11 |
 | GPU | AMD RX 6800 XT, driver seul (pas d'Adrenalin) |
-| Taille du clip | ≤ 19 Mo pour 30 s (limite Discord gratuite : 20 Mo) |
+| Taille du clip | MVP : ≤ 19 Mo pour 30 s (limite Discord gratuite : 20 Mo). Depuis l'itération 9 : choisie par l'utilisateur (qualité × durée), estimée à l'écran |
 | Codec | H.264 matériel (AMF) + AAC, conteneur MP4 |
 | Anti-cheat | EAC (Hunt: Showdown), BattlEye (R6 Siege) : aucune injection, aucun hook clavier bas niveau |
 | Démarrage | automatique avec Windows, sans fenêtre |
@@ -36,7 +38,15 @@ Au raccourci, un MP4 des **30 dernières secondes** (image + son du jeu), qui s'
 - rotation des logs ;
 - hotkey « quitter » ;
 - ffmpeg ;
-- plusieurs durées de clip.
+- dans le lecteur : découpe (trim), vitesse de lecture, image par image ;
+- compresseur vidéo (réencoder un clip pour qu'il tienne sous une taille) ;
+- plafond de taille en Mo (la qualité s'adapterait à la durée) ;
+- volume du son du PC (seul le micro est réglable) ;
+- déplacer les anciens clips quand on change de dossier ;
+- vignettes dans la liste des clips ;
+- préréglages de qualité (retirés à l'itération 9).
+
+Les sept premières lignes ci-dessus ont été proposées le 2026-10-09 : à demander quand le besoin se présente.
 
 ## Définition de « réussi »
 
@@ -63,7 +73,10 @@ D'ici là, OBS reste l'outil du quotidien.
 | 6 | Installeur Windows (voir ci-dessous) | `ClipperSetup.exe` installe sans droits admin, crée l'entrée du menu Démarrer, propose le démarrage avec Windows et lance Clipper ; Clipper apparaît dans « Applications installées » avec son icône ; la désinstallation retire exe, raccourcis et démarrage auto, garde les clips ; réinstaller par-dessus une version qui tourne fonctionne. **Fait le 2026-10-08** : setup de 2,6 Mo ; testé en silencieux : installation par-dessus le Clipper en cours (fermé puis relancé), entrée « Clipper 0.1.0 » avec icône, menu Démarrer, démarrage auto ; désinstallation propre, clips conservés. Icône et version compilées dans l'exe (maquette SVG). **Reste à faire** : l'assistant graphique vu par l'utilisateur, le design définitif de l'icône. |
 | 7 | Processus de release (voir ci-dessous) | Conventional Commits appliqués ; CI verte sur `main` ; une Release PR release-please propose la version SemVer et le `CHANGELOG.md` ; sa fusion publie une release GitHub avec le setup construit par la CI **Fait le 2026-10-08** : dépôt privé `HugoBernier/clipper`, CI verte, release `v0.1.1` publiée par release-please avec `ClipperSetup-0.1.1.exe`. |
 | 8 | Qualité réglable facilement (voir ci-dessous) | Choisir un préréglage de qualité depuis le menu de l'icône, appliqué sans relancer Clipper ; le clip suivant respecte la résolution, les fps et la taille cible du préréglage **Fait le 2026-10-08** : sous-menu « Qualité » (3 préréglages, l'actif coché), bascule à chaud testée (720p60 ↔ 1440p60, clip suivant en 3440×1440, 34 Mo sous 48), audio ininterrompu. Mémoire stable sur 30 allers-retours (92 → 104 Mo) après correction d'une fuite (`IMFShutdown` de l'encodeur async, désabonnement WGC) ; reste ~3 handles par changement, attribués au pilote. 55 tests. |
-| 9 | Interface graphique (voir ci-dessous) | Une fenêtre claire, ouverte depuis l'icône : réglages (qualité, micro, raccourci, dossier, démarrage) et derniers clips à partager ; design fourni par Claude Design |
+| C | Spike : fenêtre WebView2 (voir itération 9) | Une fenêtre Win32 affiche une page HTML locale et lit un clip dans un `<video>` ; un bouton HTML déclenche du code Rust et reçoit une réponse ; fermer la fenêtre libère le moteur (RAM revenue au niveau d'avant) ; un glisser depuis la page dépose le fichier dans Discord. |
+| 9 | Réglages dans une fenêtre (voir ci-dessous) | Depuis la fenêtre, sans relancer Clipper : résolution, fps, qualité (avec taille estimée), durée, volume du micro, dossier, raccourci, démarrage avec Windows ; le clip suivant respecte chaque réglage ; un ancien `clipper.toml` est relu sans erreur. Visuel brut : le design system viendra ensuite. |
+| 10 | Bibliothèque de clips (voir ci-dessous) | Dans la fenêtre : liste des clips du dossier, lecteur intégré, copier dans le presse-papiers puis coller dans Discord, glisser-déposer vers Discord, renommer, supprimer (corbeille), montrer dans l'Explorateur. |
+| 11 | Habillage avec le design system | La fenêtre suit le design system (fourni par l'utilisateur) ; aucune fonction ajoutée. |
 
 ## Itération 4 : micro
 
@@ -85,7 +98,7 @@ D'ici là, OBS reste l'outil du quotidien.
 
 **Décisions (2026-10-08)**
 1. Micro activé par défaut ; `microphone = false` dans `clipper.toml` pour le couper.
-2. Pas de réglage de volume pour l'instant : on juge sur les vrais clips.
+2. Pas de réglage de volume pour l'instant : on juge sur les vrais clips. *(Revu le 2026-10-09 : volume du micro réglable, itération 9.)*
 3. Micro de communication par défaut (celui de Discord).
 
 ## Itération 5 : icône dans la zone de notification
@@ -130,6 +143,8 @@ D'ici là, OBS reste l'outil du quotidien.
 
 ## Itération 8 : qualité réglable facilement
 
+*Préréglages retirés à l'itération 9 (réglages séparés) ; la bascule à chaud est réutilisée.*
+
 **Pourquoi** : la qualité (résolution, fps, taille cible) doit se changer sans éditer `clipper.toml` ni relancer Clipper.
 
 **Ce qui est dans l'itération**
@@ -137,17 +152,55 @@ D'ici là, OBS reste l'outil du quotidien.
 - **Sous-menu « Qualité »** dans le menu de l'icône, préréglage actif coché.
 - **Application à chaud** : le thread principal arrête le pipeline vidéo (drapeau vérifié à chaque image), vide le buffer, le relance au nouveau format ; l'audio continue.
 
-## Itération 9 : interface graphique
+## Itérations 9 à 11 : la fenêtre Clipper
 
-**Pourquoi** : un vrai logiciel, réglable et utilisable sans fichier de config ; partager un clip en un geste.
+**Pourquoi** : un vrai logiciel, réglable sans fichier de config, où l'on revoit ses clips et où on les partage en un geste. Ordre voulu par l'utilisateur : **les fonctions d'abord** (visuel brut), puis l'habillage quand le design system sera disponible.
 
-**Ce qui est dans l'itération** (contenu exact selon la maquette Claude Design)
-- Fenêtre ouverte depuis l'icône (clic gauche ou menu) : réglages (qualité, micro et son volume, raccourci, dossier des clips, démarrage avec Windows).
-- Liste des derniers clips : lire, ouvrir le dossier, partager (copier le fichier pour le coller dans Discord, glisser-déposer).
-- Les réglages s'appliquent sans relancer Clipper (s'appuie sur l'itération 8).
+**Technologie (décidée le 2026-10-09)** : app native, **sans Electron**. Un seul exe Rust. Une fenêtre Win32 à nous dont le contenu est en HTML, affiché par **WebView2** (le moteur d'Edge, déjà présent dans Windows 11, rien à embarquer). Le lecteur vidéo est le `<video>` du moteur, qui lit nos MP4 H.264/AAC sans code de décodage. Le design system se posera ensuite en CSS sans toucher au Rust. Le moteur ne tourne que pendant que la fenêtre est ouverte (environ 100 Mo) ; fermer la fenêtre le détruit et Clipper reste dans la zone de notification. Nouvelle crate **autorisée le 2026-10-09** : `webview2-com` (liaison officielle, sans framework).
 
-**Questions ouvertes**
-1. Technologie : la maquette Claude Design sera en HTML/CSS ; l'afficher dans une WebView2 (le moteur Edge intégré à Windows, crate à valider) permet de la reprendre presque telle quelle. Une interface native Win32 obligerait à la redessiner. À trancher quand la maquette existe.
-2. Que veut dire « partager » exactement : copier le fichier, copier un lien (demanderait un upload, hors scope), glisser vers Discord ?
+**Ouverture** : clic gauche sur l'icône, ou « Ouvrir Clipper » dans le menu.
+
+### Spike C : WebView2
+
+Le plus gros risque passe en premier : intégration à notre boucle de messages, appels HTML → Rust → HTML, lecture d'un MP4 local (dossier mappé sur un nom d'hôte virtuel), libération de la mémoire à la fermeture, et **glisser-déposer d'un fichier depuis la page vers Discord** (le glisser HTML ne transporte pas de fichier : il faudra sans doute lancer un glisser natif côté Rust).
+
+### Itération 9 : réglages
+
+**Ce qui est dans l'itération** (tout s'applique sans relancer Clipper, en réutilisant la bascule à chaud de l'itération 8)
+- **Résolution** : 720p, 1080p, 1440p (la largeur suit le ratio de l'écran, comme aujourd'hui).
+- **FPS** : 30, 60, 120, 144.
+- **Qualité** : niveaux nommés **Basse / Moyenne / Haute / Très haute**. Le débit est fixé par le niveau et suit résolution × fps (calcul pur, testé). **Moyenne en 720p60 reproduit le débit actuel** (~4,4 Mb/s). Valeurs exactes calibrées pendant l'itération.
+- **Taille estimée** affichée à côté et recalculée à chaque changement : (débit vidéo + 160 kb/s d'audio) × durée. C'est aussi, à peu près, la RAM que prend le buffer.
+- **Durée** : valeur libre de **10 à 300 s** (30 par défaut).
+- **Volume du micro** : **0 à 200 %** (100 % par défaut). Au-delà de 100 %, amplification, avec saturation à ±32767 dans le mixeur (déjà testée). Il s'applique au clip suivant, sans couper l'audio.
+- **Dossier des clips** : sélecteur de dossier Windows. Les anciens clips restent où ils sont.
+- **Raccourci** : capture d'une nouvelle combinaison ; refus clair si Windows la refuse (déjà prise).
+- **Démarrer avec Windows** : même mécanisme que le menu de l'icône.
+- **Menu de l'icône** : le sous-menu « Qualité » disparaît ; ajout de **« Ouvrir Clipper »** et d'une case **« Micro »** (on/off). Le reste ne change pas.
+- **`clipper.toml`** : les préréglages Discord et `target_mb` sont retirés au profit des champs ci-dessus. **Changement cassant** (`feat(config)!`) : un ancien fichier est relu sans erreur (`target_mb` ignoré, les autres valeurs gardées).
+
+**Tests (TDD, logique pure)** : débit par niveau × résolution × fps, estimation de taille, bornes (durée, volume), relecture d'un ancien `clipper.toml`, gain du micro dans le mixeur (0 %, 100 %, 200 % qui sature).
+
+**Risques à vérifier pendant l'itération**
+- **120/144 fps** : WGC ne livre pas plus d'images que la fréquence de l'écran. Sur un écran à 60 Hz, 144 fps double les images sans rien gagner. À afficher ou à brider selon l'écran.
+- **1440p à 120/144 fps sur ultra-large** (3440×1440) : ça dépasse le niveau H.264 5.2 (environ 2,07 M macroblocs/s, contre 2,3 M à 120 fps et 2,8 M à 144). AMF peut refuser, et des lecteurs (Discord compris) peuvent ne pas lire. Si le test échoue, ces combinaisons sont grisées.
+- **Mémoire** : 1440p144 « Très haute » sur 300 s peut dépasser 1 Go de RAM. L'estimation affichée le rend visible ; aucun plafond n'est prévu sans demande.
+
+### Itération 10 : bibliothèque de clips
+
+**Ce qui est dans l'itération**
+- **Liste** des clips du dossier courant, du plus récent au plus ancien : nom, date, durée, taille. Elle se met à jour quand un clip est sauvegardé.
+- **Lecteur intégré** façon Medal, propre : lecture/pause, barre de progression avec recherche, volume, plein écran, raccourcis clavier (espace, flèches, F). Rien de plus (découpe, vitesse, image par image : hors scope, proposés).
+- **Copier dans le presse-papiers** (bouton) : le fichier lui-même (`CF_HDROP`), comme un Ctrl+C dans l'Explorateur ; un Ctrl+V dans Discord l'envoie.
+- **Glisser-déposer** d'un clip vers Discord ou l'Explorateur.
+- **Renommer** (le fichier sur disque).
+- **Supprimer** : vers la corbeille Windows, donc récupérable.
+- **Montrer dans l'Explorateur** : le dossier s'ouvre avec le fichier sélectionné.
+
+**Validation manuelle** : coller et glisser dans Discord, lire un clip pendant qu'un autre se sauvegarde, renommer ou supprimer le clip en cours de lecture.
+
+### Itération 11 : habillage
+
+Le design system (disponible plus tard) habille la fenêtre : CSS et structure HTML seulement, aucune fonction ajoutée.
 
 Sortie de secours : si le spike A dépasse 3 soirées, on passe l'encodage et le mux à ffmpeg, et on garde WGC et WASAPI en natif.

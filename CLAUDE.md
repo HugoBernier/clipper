@@ -17,7 +17,7 @@ En cas de doute, le moins de code gagne.
 ## Règles de code
 
 - **Toolchain** : Rust stable, edition 2024, cible `x86_64-pc-windows-msvc`.
-- **Crates autorisées** : `windows`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog` ; en build-dependency, `embed-resource` (icône et version dans l'exe). Toute autre crate se demande d'abord.
+- **Crates autorisées** : `windows`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog`, `webview2-com` (fenêtre, itérations 9 à 11) ; en build-dependency, `embed-resource` (icône et version dans l'exe). Toute autre crate se demande d'abord.
 - **Erreurs** : `anyhow::Result` partout, et `.context("…")` sur chaque appel COM ou Win32. Pas de `unwrap()` hors tests.
 - **`unsafe`** : seulement dans `mf.rs`, `video.rs`, `audio.rs`, `save.rs` et `main.rs` pour la boucle de messages et le bip (`RegisterHotKey`, `GetMessageW`, `MessageBeep`). Chaque bloc porte un commentaire `// SAFETY:`. `ring.rs`, `config.rs` et `mix.rs` ont `#![forbid(unsafe_code)]`. `tray.rs` (icône, menu, registre) peut aussi contenir de l'`unsafe`.
 - **Pas de console en release** : `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`.
@@ -51,6 +51,7 @@ Mesure de synchro A/V : lancer `tools/sync_stimulus.ps1` pendant que Clipper tou
 
 - **Conventional Commits** : `type(portée): description` en français, à l'impératif, sans majuscule ni point final. Types : `feat`, `fix`, `docs`, `refactor`, `test`, `build`, `ci`, `chore`. Portées usuelles : `video`, `audio`, `mix`, `ring`, `save`, `tray`, `config`, `installer`. Changement cassant : `!` après le type et un pied `BREAKING CHANGE:`.
 - **SemVer** : la version de `Cargo.toml` est la seule source ; elle remonte dans l'exe et le setup. Ne pas la modifier à la main : release-please la fixe dans sa *Release PR* (avec `CHANGELOG.md`), et fusionner cette PR publie la release, setup compris (`.github/workflows/release.yml`).
+- **Branches et PR** : jamais de push direct sur `main`. Une branche par changement, nommée `type/description-courte` avec les mêmes types (`feat/fenetre-reglages`, `docs/fenetre-clipper`), puis une PR vers `main` dont la CI doit passer. Le titre de la PR suit Conventional Commits : fusion en *squash*, c'est lui que release-please lit sur `main`.
 
 ## Tester comme un vrai utilisateur
 
