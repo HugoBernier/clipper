@@ -9,7 +9,7 @@
 //! puis signalés à la fenêtre principale par `WM_UI` ; `main` les traite et répond par
 //! `post`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
@@ -65,6 +65,8 @@ thread_local! {
     static WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
     static REQUESTS: RefCell<VecDeque<String>> = const { RefCell::new(VecDeque::new()) };
     static CLIPS_DIR: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
+    /// Seules nos propres navigations (`load_page`) passent la garde de navigation.
+    static NAVIGATION_ALLOWED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Ouvre la fenêtre, ou la ramène au premier plan si elle l'est déjà.
@@ -161,11 +163,20 @@ fn request(message: &str) {
 pub fn set_clips_dir(dir: &Path) {
     CLIPS_DIR.with_borrow_mut(|d| *d = dir.to_path_buf());
     let webview = WINDOW.with_borrow(|w| w.as_ref().and_then(|w| w.webview.clone()));
+    // Un nouveau mappage ne vaut que pour les pages chargées ensuite : on recharge.
     if let Some(webview) = webview
-        && let Err(e) = map_clips(&webview)
+        && let Err(e) = map_clips(&webview).and_then(|()| load_page(&webview))
     {
         error!("dossier des clips pour le lecteur : {e:#}");
     }
+}
+
+fn load_page(webview: &ICoreWebView2) -> Result<()> {
+    NAVIGATION_ALLOWED.set(true);
+    // SAFETY: vue vivante, sur ce thread ; chaîne valide pendant l'appel.
+    unsafe { webview.NavigateToString(&HSTRING::from(PAGE)) }
+        .context("NavigateToString")
+        .inspect_err(|_| NAVIGATION_ALLOWED.set(false))
 }
 
 fn map_clips(webview: &ICoreWebView2) -> Result<()> {
@@ -298,13 +309,11 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
     let webview = unsafe { controller.CoreWebView2() }.context("CoreWebView2")?;
     // Un fichier déposé sur la fenêtre, ou un lien, ferait naviguer la vue : la page
     // remplaçante pourrait alors envoyer des commandes. Seule notre page est chargée.
-    let mut first = true;
-    let guard = NavigationStartingEventHandler::create(Box::new(move |_, args| {
-        if let Some(args) = args.filter(|_| !first) {
+    let guard = NavigationStartingEventHandler::create(Box::new(|_, args| {
+        if let Some(args) = args.filter(|_| !NAVIGATION_ALLOWED.replace(false)) {
             // SAFETY: arguments valides pendant l'événement.
             unsafe { args.SetCancel(true) }?;
         }
-        first = false;
         Ok(())
     }));
     let messages = WebMessageReceivedEventHandler::create(Box::new(|_, args| {
@@ -327,8 +336,11 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
             };
             let mut on = BOOL::default();
             // SAFETY: vue valide pendant l'événement.
-            unsafe { webview.ContainsFullScreenElement(&mut on) }?;
-            if let Err(e) = set_fullscreen(hwnd, on.as_bool()) {
+            let result = unsafe { webview.ContainsFullScreenElement(&mut on) }
+                .context("ContainsFullScreenElement")
+                .and_then(|()| set_fullscreen(hwnd, on.as_bool()));
+            // WebView2 ignore l'erreur rendue par un gestionnaire : on la journalise.
+            if let Err(e) = result {
                 error!("plein écran : {e:#}");
             }
             Ok(())
@@ -348,10 +360,8 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
         webview
             .add_WebMessageReceived(&messages, &mut token)
             .context("add_WebMessageReceived")?;
-        webview
-            .NavigateToString(&HSTRING::from(PAGE))
-            .context("NavigateToString")?;
     }
+    load_page(&webview)?;
     WINDOW.with_borrow_mut(|w| {
         if let Some(w) = w {
             w.controller = Some(controller);

@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use log::{error, info, warn};
 use windows::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
+    ERROR_ALREADY_EXISTS, ERROR_SHARING_VIOLATION, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -39,7 +39,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MB_OK, MESSAGEBOX_STYLE, MSG, PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage,
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY, WNDCLASSW,
 };
-use windows::core::w;
+use windows::core::{HRESULT, w};
 
 use crate::audio::Microphone;
 use crate::config::{Config, Hotkey, parse_hotkey};
@@ -251,8 +251,7 @@ fn with_app(f: impl FnOnce(&mut App)) {
 /// éventuelle.
 fn handle_ui(request: &str) {
     let (command, arg) = request.split_once('\n').unwrap_or((request, ""));
-    if LIBRARY.contains(&command) {
-        handle_library(command, arg);
+    if handle_library(command, arg) {
         return;
     }
     // Le sélecteur de dossier est une boucle modale : on l'ouvre sans tenir l'état,
@@ -299,14 +298,21 @@ fn handle_ui(request: &str) {
     });
 }
 
-/// Commandes de la bibliothèque de clips (`handle_library`).
-const LIBRARY: [&str; 6] = ["clips", "copy", "drag", "delete", "reveal", "rename"];
-
-/// Bibliothèque : l'action est faite sans tenir l'état (le glisser et la corbeille
-/// ouvrent des boucles modales), puis la liste est renvoyée si elle a pu changer.
-fn handle_library(command: &str, arg: &str) {
-    let mut dir = PathBuf::new();
-    with_app(|app| dir = app.out_dir.clone());
+/// Bibliothèque de clips ; `false` si `command` n'en relève pas. L'action est faite
+/// sans tenir l'état (le glisser et la corbeille ouvrent des boucles modales), puis la
+/// liste est renvoyée si elle a pu changer.
+fn handle_library(command: &str, arg: &str) -> bool {
+    let refresh = match command {
+        "clips" | "delete" | "rename" => true,
+        "copy" | "drag" | "reveal" => false,
+        _ => return false,
+    };
+    let mut dir = None;
+    with_app(|app| dir = Some(app.out_dir.clone()));
+    let Some(dir) = dir else {
+        ui::post("error\nClipper est occupé, réessayez.");
+        return true;
+    };
     let clip = |name: &str| -> Result<PathBuf> {
         let path = library::clip_path(&dir, name)?;
         ensure!(path.is_file(), "clip introuvable : {name}");
@@ -317,9 +323,9 @@ fn handle_library(command: &str, arg: &str) {
         "copy" => clip(arg).and_then(|p| shell::copy(&p)),
         "drag" => clip(arg).and_then(|p| shell::drag(owner, &p)),
         "reveal" => clip(arg).and_then(|p| shell::reveal(&p)),
-        "delete" => clip(arg).and_then(|p| retry(|| shell::recycle(owner, &p))),
+        "delete" => clip(arg).and_then(|p| retry_while_in_use(|| shell::recycle(owner, &p))),
         "rename" => match arg.split_once('\t') {
-            Some((old, new)) => retry(|| library::rename(&dir, old, new).map(|_| ())),
+            Some((old, new)) => retry_while_in_use(|| library::rename(&dir, old, new).map(|_| ())),
             None => Err(anyhow!("renommage mal formé : {arg}")),
         },
         _ => Ok(()),
@@ -332,21 +338,41 @@ fn handle_library(command: &str, arg: &str) {
             ui::post(&format!("error\n{e:#}"));
         }
     }
-    if matches!(command, "clips" | "delete" | "rename") {
+    if refresh {
         post_clips(&dir);
     }
+    true
 }
 
 /// Le lecteur vient de lâcher le clip, mais le moteur de la page ferme le fichier un
 /// peu après : un renommage ou une suppression immédiats peuvent le trouver ouvert.
-fn retry(mut action: impl FnMut() -> Result<()>) -> Result<()> {
+/// Seule cette erreur est réessayée (pas un refus, ni une suppression annulée).
+fn retry_while_in_use(mut action: impl FnMut() -> Result<()>) -> Result<()> {
     for _ in 0..4 {
-        if action().is_ok() {
-            return Ok(());
+        match action() {
+            Err(e) if file_in_use(&e) => std::thread::sleep(Duration::from_millis(150)),
+            result => return result,
         }
-        std::thread::sleep(Duration::from_millis(150));
     }
     action()
+}
+
+fn file_in_use(e: &anyhow::Error) -> bool {
+    // Même erreur vue par IFileOperation (COPYENGINE_E_SHARING_VIOLATION_SRC).
+    const COPY_ENGINE_SHARING_VIOLATION: HRESULT = HRESULT(0x8027_0021_u32 as i32);
+    let violation = ERROR_SHARING_VIOLATION.0;
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+            == Some(violation as i32)
+            || cause
+                .downcast_ref::<windows::core::Error>()
+                .is_some_and(|w| {
+                    w.code() == HRESULT::from_win32(violation)
+                        || w.code() == COPY_ENGINE_SHARING_VIOLATION
+                })
+    })
 }
 
 fn post_clips(dir: &Path) {

@@ -163,6 +163,8 @@
   // Bibliothèque.
   const player = $('player');
   let current = null;
+  // Après un renommage, le clip à resélectionner : son nouveau nom, sinon l'ancien.
+  let renamed = null;
 
   function status(text, error = false) {
     $('clip-status').textContent = text;
@@ -171,6 +173,7 @@
 
   function showClips(lines) {
     const list = $('list');
+    const scroll = list.scrollTop;
     list.textContent = '';
     let found = false;
     for (const line of lines) {
@@ -205,7 +208,14 @@
       found ||= name === current;
     }
     if (!lines.length) list.textContent = 'Aucun clip pour l\'instant.';
+    list.scrollTop = scroll;
     if (!found) unload();
+    if (renamed) {
+      const names = [...list.children].map(r => r.dataset.name);
+      const pick = [renamed.to, renamed.from].find(n => names.includes(n));
+      renamed = null;
+      if (pick) select(pick, false);
+    }
     highlight();
   }
 
@@ -215,12 +225,12 @@
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
-  function select(name) {
+  function select(name, play = true) {
     current = name;
     const row = [...$('list').children].find(r => r.dataset.name === name);
     // `v` : un clip renommé puis remplacé sous le même nom n'est pas lu depuis le cache.
     player.src = `https://clips.clipper/${encodeURIComponent(name)}?v=${row?.dataset.modified ?? ''}`;
-    player.play().catch(() => {});
+    if (play) player.play().catch(() => {});
     highlight();
   }
 
@@ -245,6 +255,9 @@
     if (!name) return;
     const old = current;
     unload();
+    // Même règle que Rust (`library::new_name`) : espaces retirés, `.mp4` ajouté.
+    const to = /\.mp4$/i.test(name.trim()) ? name.trim() : `${name.trim()}.mp4`;
+    renamed = { from: old, to };
     send('rename', `${old}\t${name}`);
   });
   $('delete').addEventListener('click', () => {
@@ -254,13 +267,18 @@
     send('delete', old);
   });
 
+  // Un bouton cliqué à la souris rend le focus : Espace commande alors le lecteur au
+  // lieu de rejouer « Copier ». Au clavier (Tab), le bouton garde Espace.
+  for (const button of document.querySelectorAll('nav button, #viewer button')) {
+    button.addEventListener('click', e => { if (e.detail > 0) button.blur(); });
+  }
+
   // Raccourcis du lecteur : espace, flèches (±5 s), F (plein écran). Le lecteur
   // sélectionné gère lui-même espace et flèches.
   document.addEventListener('keydown', e => {
     if (capturing || $('clips-view').hidden || !current) return;
-    if (['INPUT', 'SELECT'].includes(e.target.tagName)) return;
-    // Après un clic sur « Copier », Espace mettrait en pause, pas recopier (le
-    // preventDefault ci-dessous empêche le bouton de se déclencher).
+    if (e.ctrlKey || e.altKey || e.metaKey) return;
+    if (['INPUT', 'SELECT', 'BUTTON'].includes(e.target.tagName)) return;
     const own = e.target === player;
     if (e.code === 'Space' && !own) player.paused ? player.play() : player.pause();
     else if (e.code === 'ArrowLeft' && !own) player.currentTime -= 5;

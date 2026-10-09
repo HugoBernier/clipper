@@ -51,25 +51,47 @@ pub fn list(dir: &Path) -> Result<Vec<ClipInfo>> {
     }
     let mut clips = Vec::new();
     for entry in std::fs::read_dir(dir).with_context(|| format!("lecture de {}", dir.display()))? {
-        let entry = entry?;
+        // Une entrée illisible (supprimée pendant la lecture, partage réseau) est sautée
+        // plutôt que de cacher toute la bibliothèque.
+        let Ok(entry) = entry else { continue };
         let path = entry.path();
-        let metadata = entry.metadata()?;
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
         if !metadata.is_file() || !is_mp4(&path) {
             continue;
         }
         let modified_ms = metadata
-            .modified()?
-            .duration_since(UNIX_EPOCH)
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
             .map_or(0, |d| d.as_millis() as u64);
         clips.push(ClipInfo {
             name: entry.file_name().to_string_lossy().into_owned(),
             modified_ms,
             size: metadata.len(),
-            duration: file_duration(&path).ok(),
+            duration: (!online_only(&metadata))
+                .then(|| file_duration(&path).ok())
+                .flatten(),
         });
     }
     clips.sort_by_key(|c| std::cmp::Reverse(c.modified_ms));
     Ok(clips)
+}
+
+/// Fichier OneDrive « disponible en ligne uniquement » : le lire le téléchargerait en
+/// entier. Sa durée n'est pas lue.
+#[cfg(windows)]
+fn online_only(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    /// FILE_ATTRIBUTE_OFFLINE, RECALL_ON_OPEN, RECALL_ON_DATA_ACCESS.
+    const ONLINE_ONLY: u32 = 0x1000 | 0x4_0000 | 0x40_0000;
+    metadata.file_attributes() & ONLINE_ONLY != 0
+}
+
+#[cfg(not(windows))]
+fn online_only(_: &std::fs::Metadata) -> bool {
+    false
 }
 
 fn is_mp4(path: &Path) -> bool {
@@ -182,13 +204,23 @@ pub fn rename(dir: &Path, old: &str, input: &str) -> Result<String> {
     ensure!(from.is_file(), "clip introuvable : {old}");
     let new = new_name(input)?;
     let to = clip_path(dir, &new)?;
-    // Changer seulement la casse (accents compris) : NTFS voit le même fichier.
-    if new.to_lowercase() != old.to_lowercase() && to.exists() {
+    // `fs::rename` remplace une destination existante sous Windows. Seul cas permis :
+    // la destination est ce même fichier (changement de casse, que NTFS ignore).
+    if to.exists() && !same_file(&from, &to) {
         bail!("un clip s'appelle déjà {new}");
     }
     std::fs::rename(&from, &to)
         .with_context(|| format!("renommage de {old} (clip en cours de lecture ?)"))?;
     Ok(new)
+}
+
+/// Même fichier sur disque, quelle que soit la casse demandée : le chemin réel est
+/// comparé, pas les noms (le repli de casse de NTFS n'est pas celui de Rust).
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +410,12 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("b.mp4")).unwrap(), b"b");
         assert_eq!(rename(&dir, "a.mp4", "ace").unwrap(), "ace.mp4");
         assert!(dir.join("ace.mp4").exists() && !dir.join("a.mp4").exists());
+        // Dossier sensible à la casse (ou repli de casse différent de NTFS) : « A.mp4 »
+        // est un autre clip que « a.mp4 », il ne doit pas être écrasé.
+        std::fs::write(dir.join("A.mp4"), b"autre").unwrap();
+        std::fs::write(dir.join("a.mp4"), b"a").unwrap();
+        assert!(rename(&dir, "a.mp4", "A").is_err());
+        assert_eq!(std::fs::read(dir.join("A.mp4")).unwrap(), b"autre");
         // Changer seulement la casse, accents compris : pas une collision.
         std::fs::write(dir.join("été.mp4"), b"e").unwrap();
         assert_eq!(rename(&dir, "été.mp4", "Été").unwrap(), "Été.mp4");
