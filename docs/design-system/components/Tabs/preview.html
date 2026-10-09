@@ -1,0 +1,80 @@
+<!-- @dsCard group="Navigation" height=72 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"></head>
+<body>
+<div class="cl-row">
+<div class="cl-tabs" role="tablist" style="width:100%"><button class="cl-tab" role="tab" data-tab="clips" aria-selected="true"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M6.5 6.5v3l3-1.5z"/></svg>Clips <span class="cl-count">5</span></button><button class="cl-tab" role="tab" data-tab="settings" aria-selected="false"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2.5M8 11.5h6"/><circle cx="10.75" cy="4.5" r="1.75"/><circle cx="6.25" cy="11.5" r="1.75"/></svg>Réglages</button></div>
+</div>
+<script>
+var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+var toast = document.getElementById('toast'), timer, open = null;
+function say(text) {
+  if (!toast) return;
+  toast.querySelector('.cl-toast__text').textContent = text;
+  toast.hidden = false; clearTimeout(timer);
+  timer = setTimeout(function () { toast.hidden = true; }, 2400);
+}
+function current() { return document.querySelector('.cl-clip[aria-selected="true"]'); }
+function pick(row) {
+  $$('.cl-clip').forEach(function (r) { r.setAttribute('aria-selected', r === row ? 'true' : 'false'); });
+  var t = document.querySelector('[data-v-title]'), f = document.querySelector('[data-v-file]');
+  if (row && t) { t.textContent = row.getAttribute('data-title'); f.textContent = row.getAttribute('data-file'); }
+  $$('.cl-viewer button').forEach(function (b) { b.disabled = !row; });
+}
+function count() { var c = document.querySelector('.cl-count'); if (c) c.textContent = $$('.cl-clip').length; }
+function show(name) {
+  var d = document.querySelector('[data-dialog="' + name + '"]'); if (!d) return;
+  var row = current(); if (!row) return;
+  var file = row.getAttribute('data-file');
+  var f = d.querySelector('[data-dialog-file]'); if (f) f.textContent = file;
+  var i = d.querySelector('input'); if (i) i.value = file.replace(/\.mp4$/, '');
+  d.hidden = false; open = { d: d, from: document.activeElement };
+  (i || d.querySelector('[data-cancel]')).focus(); if (i) i.select();
+}
+function close() { if (!open) return; open.d.hidden = true; if (open.from && open.from.focus) open.from.focus(); open = null; }
+document.addEventListener('click', function (e) {
+  var row = e.target.closest('.cl-clip'); if (row) pick(row);
+  var b = e.target.closest('button'); if (!b) return;
+  if (b.hasAttribute('data-tab')) {
+    $$('.cl-tab').forEach(function (o) { o.setAttribute('aria-selected', o === b ? 'true' : 'false'); });
+    $$('[data-panel]').forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== b.getAttribute('data-tab'); });
+  }
+  var g = b.closest('.cl-seg');
+  if (g) $$('button', g).forEach(function (o) { o.setAttribute('aria-checked', o === b ? 'true' : 'false'); });
+  if (b.hasAttribute('data-copy')) say('Copié');
+  if (b.hasAttribute('data-delete')) show('delete');
+  if (b.hasAttribute('data-rename')) show('rename');
+  if (b.hasAttribute('data-cancel')) close();
+  if (b.hasAttribute('data-confirm')) {
+    var r = current(), next = r && (r.nextElementSibling || r.previousElementSibling);
+    if (r) r.remove(); open.from = null; close(); count(); pick(next);
+  }
+  if (b.hasAttribute('data-confirm-rename')) {
+    var v = open.d.querySelector('input').value.trim(), c = current();
+    if (v && c) { c.setAttribute('data-file', v + '.mp4'); c.querySelector('.cl-clip__file').textContent = v + '.mp4'; pick(c); }
+    close();
+  }
+  if (b.hasAttribute('data-capture')) {
+    var cell = b.parentNode, before = cell.innerHTML;
+    cell.innerHTML = '<span class="cl-capture">Appuyez sur la combinaison</span><span class="cl-kbd"><kbd>Échap</kbd></span>';
+    var done = function (ev) { ev.preventDefault(); document.removeEventListener('keydown', done, true); cell.innerHTML = before; };
+    document.addEventListener('keydown', done, true);
+  }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && open) return close();
+  var row = e.target.closest && e.target.closest('.cl-clip');
+  if (row && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    var n = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+    if (n) { n.focus(); pick(n); } e.preventDefault();
+  }
+  if (row && e.key === 'Delete') show('delete');
+  if (row && e.key === 'F2') show('rename');
+});
+document.addEventListener('input', function (e) {
+  if (e.target.hasAttribute('data-duration')) $$('[data-seconds]').forEach(function (n) { n.textContent = e.target.value; });
+});
+</script>
+</body>
+</html>

@@ -43,10 +43,10 @@ Depuis l'itération 9 : la durée, la résolution, les fps et la qualité sont d
 - plafond de taille en Mo (la qualité s'adapterait à la durée) ;
 - volume du son du PC (seul le micro est réglable) ;
 - déplacer les anciens clips quand on change de dossier ;
-- vignettes dans la liste des clips ;
-- préréglages de qualité (retirés à l'itération 9).
+- préréglages de qualité (retirés à l'itération 9) ;
+- thème clair, choix du thème.
 
-Les sept premières lignes ci-dessus ont été proposées le 2026-10-09 : à demander quand le besoin se présente.
+Les lignes « dans le lecteur… » à « déplacer les anciens clips… » ont été proposées le 2026-10-09 : à demander quand le besoin se présente. Les vignettes, d'abord ici, entrent à l'itération 11b (design system validé le 2026-10-09).
 
 ## Définition de « réussi »
 
@@ -76,7 +76,8 @@ D'ici là, OBS reste l'outil du quotidien.
 | C | Spike : fenêtre WebView2 (voir itération 9) | Une fenêtre Win32 affiche une page HTML locale et lit un clip dans un `<video>` ; un bouton HTML déclenche du code Rust et reçoit une réponse ; fermer la fenêtre libère le moteur (RAM revenue au niveau d'avant) ; un glisser depuis la page dépose le fichier dans Discord. **Code écrit le 2026-10-09** (`examples/webview.rs`, compilé pour Windows, loader WebView2 lié en statique : pas de DLL à livrer). **Reste à faire** : la validation sur le PC. |
 | 9 | Réglages dans une fenêtre (voir ci-dessous) | Depuis la fenêtre, sans relancer Clipper : résolution, fps, qualité (avec taille estimée), durée, volume du micro, dossier, raccourci, démarrage avec Windows ; le clip suivant respecte chaque réglage ; un ancien `clipper.toml` est relu sans erreur. Visuel brut : le design system viendra ensuite. **Code écrit le 2026-10-09** : fenêtre `ui.rs` + `ui.html` (clic sur l'icône), débit par niveau de qualité, taille estimée, volume et coupure du micro à chaud, raccourci et dossier changés à chaud (l'ancien raccourci est remis si le nouveau est pris), case « Micro » dans le menu ; tests de la logique pure (config, mixeur, ring). Compilé pour Windows, mais pas encore lancé. **Reste à faire** : tout valider sur le PC (spike C d'abord), calibrer les niveaux sur de vrais clips, et tester 1440p en ultra-large. 120/144 fps retirés le 2026-10-09 (voir ci-dessous). |
 | 10 | Bibliothèque de clips (voir ci-dessous) | Dans la fenêtre : liste des clips du dossier, lecteur intégré, copier dans le presse-papiers puis coller dans Discord, glisser-déposer vers Discord, renommer, supprimer (corbeille), montrer dans l'Explorateur. **Code écrit le 2026-10-09** : onglet *Clips* (liste nom/date/durée/taille mise à jour à chaque sauvegarde, lecteur avec plein écran et raccourcis espace/flèches/F, Copier, Renommer, Supprimer, Montrer), glisser natif ; modules `library` (pur, TDD) et `shell` ; page vérifiée dans Chromium avec une imitation de WebView2 (liste, sélection, actions, glisser au seul bouton gauche). **Reste à faire** : valider sur le PC (coller et glisser dans Discord surtout), et le spike C. |
-| 11 | Habillage avec le design system | La fenêtre suit le design system (fourni par l'utilisateur) ; aucune fonction ajoutée. |
+| 11a | Habillage avec le design system (voir ci-dessous) | La fenêtre suit `docs/design-system/` : structure, styles, textes, boîtes de dialogue, lecteur et raccourcis de la liste ; seul `ui.html` change. |
+| 11b | Ce que le design ajoute côté Rust (voir ci-dessous) | Bandeau d'état et « Ouvrir le dossier » ; vignette, définition et images/s, « Nouveau » sur chaque clip. |
 
 ## Itération 4 : micro
 
@@ -200,8 +201,39 @@ Le plus gros risque passe en premier : intégration à notre boucle de messages,
 
 **Validation manuelle** : coller et glisser dans Discord, lire un clip pendant qu'un autre se sauvegarde, renommer ou supprimer le clip en cours de lecture.
 
-### Itération 11 : habillage
+### Itération 11 : le design system
 
-Le design system (disponible plus tard) habille la fenêtre : CSS et structure HTML seulement, aucune fonction ajoutée.
+**Référence** : `docs/design-system/` (copie de l'[artefact validé](https://claude.ai/artifact/9ce3NWEX8TXJU9qXAVPZRZ) le 2026-10-09). Le code s'adapte au design system, jamais l'inverse ; un écart se règle en modifiant d'abord le design system. À lire avant de toucher à `ui.html` : son `README.md` (principes, textes, couleurs), puis `components/MainWindow`, `SettingsView`, `ClipItem`, `ClipPlayer`, `Dialog`.
+
+**Décisions du 2026-10-09**
+- Thème sombre seul, quel que soit le mode de Windows.
+- Textes minimaux, sans nom d'application tierce ni de ses limites (« Copié », pas « Ctrl+V dans Discord ») : le texte n'a pas à changer quand un autre logiciel change ses règles.
+- Onglet Clips : liste et lecteur côte à côte.
+- Qualité : réglages séparés (résolution, images/s, qualité) et taille estimée, pas de préréglages : avec une durée réglable, une taille fixe sur un préréglage serait fausse.
+- Suppression : confirmation, puis corbeille. Seule action confirmée.
+
+**11a : habillage** (seul `ui.html` change, aucun code Rust)
+
+| Aujourd'hui dans `ui.html` | Selon le design system |
+|---|---|
+| Styles bruts | `tokens.css` et `bundle.css` du design system, classes `cl-` |
+| Commandes du lecteur fournies par le navigateur | Barre de Clipper : lecture, position, temps, volume, plein écran |
+| `confirm()` et `prompt()` | Boîtes « Supprimer ce clip ? » et « Renommer » (composant Dialog) |
+| « Copié : X. Ctrl+V dans Discord pour l'envoyer. » | « Copié » |
+| « Montrer dans l'Explorateur », « Renommer… », « Supprimer », « Changer… » | Boutons-icônes « Afficher dans le dossier », « Renommer », « Mettre à la corbeille » ; « Modifier » (raccourci), « Changer » (dossier) |
+| « Durée du clip », « Images par seconde », « Volume du micro », « Quel micro », « Dossier des clips » | « Durée », « Images/s », « Volume micro », « Périphérique », « Dossier » |
+| « Par défaut (micro de communication de Windows) » | « Par défaut » |
+| « ≈ X Mo par clip (l×h, N Mb/s) » | Ligne « Taille estimée » : « ≈ 17 Mo », puis définition et débit |
+| Titre de clip = nom du fichier | Titre « Aujourd'hui · 21:14 », nom du fichier dessous, puis la taille |
+| Pas de raccourci dans la liste | ↑/↓ change de clip, Suppr supprime, F2 renomme |
+
+**11b : ce que le design ajoute côté Rust** (une petite étape par ligne)
+- **Bandeau d'état** : « Enregistrement · Alt+F10 sauvegarde les 30 dernières secondes », ou « En pause » et la raison (aucun écran) ; Rust envoie l'état à la page.
+- **« Ouvrir le dossier »** dans l'en-tête : même action que le menu de l'icône.
+- **Définition et images/s de chaque clip** (« 15,2 Mo · 720p · 60 i/s ») : lues dans le MP4 (`mp4box`).
+- **Vignette** de chaque clip, 16:9, durée en bas à droite. Comment l'obtenir (image extraite par Media Foundation, ou rendue par la page) : à trancher par un petit spike.
+- **« Nouveau »** sur le clip sauvegardé depuis la dernière ouverture de la fenêtre.
+
+**Validation manuelle** : comparer chaque vue aux `preview.html` du design system, au clavier et à la souris.
 
 Sortie de secours : si le spike A dépasse 3 soirées, on passe l'encodage et le mux à ffmpeg, et on garde WGC et WASAPI en natif.
