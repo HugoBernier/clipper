@@ -1,0 +1,43 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css">
+<style>
+  body { margin: 0; background: var(--surface-0); }
+  .cv { position: relative; width: 960px; height: 288px; overflow: hidden; background: var(--surface-0); }
+  .cv svg { position: absolute; left: 0; top: 0; }
+  .tile { fill: var(--tile); }
+  .band { fill: var(--ink); }
+  .rec { fill: var(--rec); }
+  .snow { fill: var(--tile-ink); }
+  .arc { fill: none; stroke: var(--tile-ink); stroke-width: 16px; stroke-linecap: round; }
+  .arc2 { fill: none; stroke: var(--tile-deep); stroke-width: 16px; stroke-linecap: round; }
+  .txt { position: absolute; left: 48px; bottom: 40px; max-width: 440px; }
+  .name { font-family: var(--font-display); font-weight: 600; font-size: 104px; line-height: .95; color: var(--ink); letter-spacing: -2px; }
+  .tag { margin-top: 16px; font-family: var(--font-ui); font-size: 14px; line-height: 20px; color: var(--ink-muted); }
+</style>
+</head>
+<body>
+<div class="cv">
+  <svg width="960" height="288" viewBox="0 0 960 288" aria-hidden="true">
+    <!-- blocks: tile slab 256x288 (bleeds top and bottom), rec block 224x144, ink band 208x128 with tile and rec discs; tile-ink arcs.
+         arrangement: one tall slab with two stacked satellites on the right edge, flush, square corners except radius-lg on the inner rec block.
+         pattern: literal motif (replay arrow + record dot from the icon) -> concentric open arcs at 32px pitch (space-8) around a rec disc; chosen because the brand is the icon's loop.
+         scales: space-4 gaps (16), space-8 arc pitch (32), radius-lg (8) on rec block, radius-full discs. -->
+    <rect class="tile" x="480" y="0" width="256" height="288"/>
+    <path class="arc" d="M 565 101 A 64 64 0 1 1 544 144"/>
+    <path class="arc2" d="M 541 77 A 96 96 0 1 1 512 144"/>
+    <circle class="rec" cx="608" cy="144" r="32"/>
+    <rect class="rec" x="752" y="0" width="208" height="144" rx="8"/>
+    <rect class="band" x="752" y="160" width="208" height="128"/>
+    <circle class="tile" cx="856" cy="224" r="16"/>
+    <circle class="rec" cx="904" cy="224" r="16"/>
+    <circle class="tile" cx="808" cy="224" r="16"/>
+  </svg>
+  <div class="txt">
+    <div class="name">Clipper</div>
+    <div class="tag">Les 30 dernières secondes, au raccourci.</div>
+  </div>
+</div>
+</body>
+</html>

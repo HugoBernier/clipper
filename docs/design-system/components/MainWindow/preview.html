@@ -1,0 +1,154 @@
+<!-- @dsCard group="Views" height=620 width=1000 page subtitle="Vue par défaut : clips" -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"></head>
+<body>
+<div class="cl-row">
+<div class="cl-window">
+  <div class="cl-titlebar"><img src="../../../../assets/clipper.svg" alt=""><span class="cl-titlebar__title">Clipper</span><span class="cl-titlebar__btn"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 8h8"/></svg></span><span class="cl-titlebar__btn"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></span></div>
+  <header class="cl-header">
+    <div class="cl-status"><span class="cl-dot" aria-hidden="true"></span><span class="cl-status__text"><span class="cl-status__title">Enregistrement</span><span class="cl-status__sub"><span class="cl-kbd"><kbd>Alt</kbd><span>+</span><kbd>F10</kbd></span> sauvegarde les <span data-seconds>30</span> dernières secondes</span></span></div>
+    <button class="cl-btn cl-btn--secondary"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg>Ouvrir le dossier</button>
+  </header>
+  <nav class="cl-nav"><div class="cl-tabs" role="tablist">
+    <button class="cl-tab" role="tab" data-tab="clips" aria-selected="true"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M6.5 6.5v3l3-1.5z"/></svg>Clips <span class="cl-count">5</span></button>
+    <button class="cl-tab" role="tab" data-tab="settings" aria-selected="false"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2.5M8 11.5h6"/><circle cx="10.75" cy="4.5" r="1.75"/><circle cx="6.25" cy="11.5" r="1.75"/></svg>Réglages</button>
+  </div></nav>
+  <main class="cl-body cl-body--clips" data-panel="clips"><div class="cl-library"><div class="cl-clips" role="listbox" aria-label="Clips"><div class="cl-clip cl-clip--new" role="option" aria-selected="true" tabindex="0" data-file="clip_20261008_211403.mp4" data-title="Aujourd’hui · 21:14">
+  <span class="cl-thumb"><span class="cl-thumb__chip">0:31</span></span>
+  <span class="cl-clip__body"><span class="cl-clip__title">Aujourd’hui · 21:14</span><span class="cl-clip__file">clip_20261008_211403.mp4</span><span class="cl-clip__meta">15,2 Mo · 720p · 60 i/s</span></span>
+</div><div class="cl-clip" role="option" aria-selected="false" tabindex="0" data-file="clip_20261008_205217.mp4" data-title="Aujourd’hui · 20:52">
+  <span class="cl-thumb"><span class="cl-thumb__chip">0:30</span></span>
+  <span class="cl-clip__body"><span class="cl-clip__title">Aujourd’hui · 20:52</span><span class="cl-clip__file">clip_20261008_205217.mp4</span><span class="cl-clip__meta">18,7 Mo · 720p · 60 i/s</span></span>
+</div><div class="cl-clip" role="option" aria-selected="false" tabindex="0" data-file="clip_20261007_230541.mp4" data-title="Hier · 23:05">
+  <span class="cl-thumb"><span class="cl-thumb__chip">1:00</span></span>
+  <span class="cl-clip__body"><span class="cl-clip__title">Hier · 23:05</span><span class="cl-clip__file">clip_20261007_230541.mp4</span><span class="cl-clip__meta">29,4 Mo · 720p · 60 i/s</span></span>
+</div><div class="cl-clip" role="option" aria-selected="false" tabindex="0" data-file="clip_20261007_224108.mp4" data-title="Hier · 22:41">
+  <span class="cl-thumb"><span class="cl-thumb__chip">0:30</span></span>
+  <span class="cl-clip__body"><span class="cl-clip__title">Hier · 22:41</span><span class="cl-clip__file">clip_20261007_224108.mp4</span><span class="cl-clip__meta">41,3 Mo · 1440p · 60 i/s</span></span>
+</div><div class="cl-clip" role="option" aria-selected="false" tabindex="0" data-file="clip_20261007_215803.mp4" data-title="7 oct. · 21:58">
+  <span class="cl-thumb"><span class="cl-thumb__chip">0:30</span></span>
+  <span class="cl-clip__body"><span class="cl-clip__title">7 oct. · 21:58</span><span class="cl-clip__file">clip_20261007_215803.mp4</span><span class="cl-clip__meta">16,9 Mo · 1080p · 30 i/s</span></span>
+</div></div><div class="cl-viewer">
+  <div class="cl-video" aria-label="Lecteur" draggable="true">
+    <span class="cl-video__play"><svg class="cl-icon" viewBox="0 0 16 16" width="28" height="28" aria-hidden="true"><path d="M5 3.5l7 4.5-7 4.5z"/></svg></span>
+    <span class="cl-video__controls">
+      <button class="cl-vbtn" aria-label="Pause" title="Pause (Espace)"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg></button>
+      <input class="cl-video__seek" type="range" min="0" max="31" value="12" aria-label="Position">
+      <span class="cl-video__time">0:12 / 0:31</span>
+      <button class="cl-vbtn" aria-label="Volume" title="Volume"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.75 3.75a6 6 0 0 1 0 8.5"/></svg></button>
+      <button class="cl-vbtn" aria-label="Plein écran" title="Plein écran (F)"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></svg></button>
+    </span>
+  </div>
+  <div class="cl-viewer__info">
+    <span class="cl-viewer__title"><span class="cl-clip__title" data-v-title>Aujourd’hui · 21:14</span><span class="cl-clip__file" data-v-file>clip_20261008_211403.mp4</span></span>
+    <span class="cl-viewer__actions">
+      <span class="cl-toast" id="toast" role="status" hidden><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M3 8.5l3 3 7-7"/></svg><span class="cl-toast__text">Copié</span></span>
+      <button class="cl-btn cl-btn--secondary" data-copy><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3 10.5V3.5a1 1 0 0 1 1-1h6.5"/></svg>Copier</button>
+      <button class="cl-btn cl-btn--ghost cl-btn--icon" aria-label="Renommer" title="Renommer" data-rename><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></svg></button>
+      <button class="cl-btn cl-btn--ghost cl-btn--icon" aria-label="Afficher dans le dossier" title="Afficher dans le dossier"><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></svg></button>
+      <button class="cl-btn cl-btn--ghost cl-btn--icon" aria-label="Mettre à la corbeille" title="Mettre à la corbeille" data-delete><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6l.7-8.5M6.75 7v3.5M9.25 7v3.5"/></svg></button>
+    </span>
+  </div>
+</div></div></main>
+  <main class="cl-body" data-panel="settings" hidden><section class="cl-settings">
+<div class="cl-setting"><span class="cl-setting__label"><span>Résolution</span></span><span class="cl-setting__value"><div class="cl-seg" role="radiogroup" aria-label="Résolution"><button role="radio" aria-checked="true">720p</button><button role="radio" aria-checked="false">1080p</button><button role="radio" aria-checked="false">1440p</button></div></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Images/s</span></span><span class="cl-setting__value"><div class="cl-seg" role="radiogroup" aria-label="Images par seconde"><button role="radio" aria-checked="false">30</button><button role="radio" aria-checked="true">60</button></div></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Qualité</span></span><span class="cl-setting__value"><div class="cl-seg" role="radiogroup" aria-label="Qualité"><button role="radio" aria-checked="false">Basse</button><button role="radio" aria-checked="true">Moyenne</button><button role="radio" aria-checked="false">Haute</button><button role="radio" aria-checked="false">Très haute</button></div></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Durée</span></span><span class="cl-setting__value"><span class="cl-number"><input class="cl-input" type="number" min="10" max="300" step="1" value="30" aria-label="Durée en secondes" data-duration><span>s</span></span></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Taille estimée</span></span><span class="cl-setting__value"><span class="cl-estimate"><span class="cl-estimate__mb">≈ 17 Mo</span><span class="cl-estimate__detail">1720×720 · 4,4 Mb/s</span></span></span></div>
+</section>
+<section class="cl-settings">
+<div class="cl-setting"><span class="cl-setting__label"><span>Micro</span></span><span class="cl-setting__value"><label class="cl-switch"><input type="checkbox" role="switch" aria-label="Micro" checked><span class="cl-switch__track"></span></label></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Périphérique</span></span><span class="cl-setting__value"><span class="cl-select"><select aria-label="Micro utilisé"><option selected>Par défaut</option><option>Microphone (Scarlett Solo USB)</option><option>Casque (Arctis Nova 7)</option></select><svg class="cl-icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M4.5 6.5L8 10l3.5-3.5"/></svg></span></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Volume micro</span></span><span class="cl-setting__value"><span class="cl-slider"><input type="range" min="0" max="200" step="5" value="100" aria-label="Volume micro" oninput="this.nextElementSibling.textContent=this.value+&quot; %&quot;"><output>100 %</output></span></span></div>
+</section>
+<section class="cl-settings">
+<div class="cl-setting"><span class="cl-setting__label"><span>Raccourci</span></span><span class="cl-setting__value"><span class="cl-kbd"><kbd>Alt</kbd><span>+</span><kbd>F10</kbd></span><button class="cl-btn cl-btn--secondary" data-capture>Modifier</button></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Dossier</span></span><span class="cl-setting__value"><span class="cl-path">C:\Users\…\Vidéos\Clipper</span><button class="cl-btn cl-btn--secondary">Changer</button></span></div>
+<div class="cl-setting"><span class="cl-setting__label"><span>Démarrer avec Windows</span></span><span class="cl-setting__value"><label class="cl-switch"><input type="checkbox" role="switch" aria-label="Démarrer avec Windows" checked><span class="cl-switch__track"></span></label></span></div>
+</section></main>
+  <div class="cl-scrim" data-dialog="delete" hidden><div class="cl-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlg-del">
+  <span class="cl-dialog__title" id="dlg-del">Supprimer ce clip ?</span>
+  <span class="cl-clip__file" data-dialog-file>clip_20261008_211403.mp4</span>
+  <div class="cl-dialog__actions"><button class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary" data-confirm>Supprimer</button></div>
+</div></div>
+<div class="cl-scrim" data-dialog="rename" hidden><form class="cl-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-ren" onsubmit="return false">
+  <label class="cl-dialog__title" id="dlg-ren" for="ren-input">Renommer</label>
+  <span class="cl-field"><input class="cl-input cl-input--text" id="ren-input" value="clip_20261008_211403"><span>.mp4</span></span>
+  <div class="cl-dialog__actions"><button type="button" class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary" data-confirm-rename>Renommer</button></div>
+</form></div>
+</div>
+</div>
+<script>
+var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+var toast = document.getElementById('toast'), timer, open = null;
+function say(text) {
+  if (!toast) return;
+  toast.querySelector('.cl-toast__text').textContent = text;
+  toast.hidden = false; clearTimeout(timer);
+  timer = setTimeout(function () { toast.hidden = true; }, 2400);
+}
+function current() { return document.querySelector('.cl-clip[aria-selected="true"]'); }
+function pick(row) {
+  $$('.cl-clip').forEach(function (r) { r.setAttribute('aria-selected', r === row ? 'true' : 'false'); });
+  var t = document.querySelector('[data-v-title]'), f = document.querySelector('[data-v-file]');
+  if (row && t) { t.textContent = row.getAttribute('data-title'); f.textContent = row.getAttribute('data-file'); }
+  $$('.cl-viewer button').forEach(function (b) { b.disabled = !row; });
+}
+function count() { var c = document.querySelector('.cl-count'); if (c) c.textContent = $$('.cl-clip').length; }
+function show(name) {
+  var d = document.querySelector('[data-dialog="' + name + '"]'); if (!d) return;
+  var row = current(); if (!row) return;
+  var file = row.getAttribute('data-file');
+  var f = d.querySelector('[data-dialog-file]'); if (f) f.textContent = file;
+  var i = d.querySelector('input'); if (i) i.value = file.replace(/\.mp4$/, '');
+  d.hidden = false; open = { d: d, from: document.activeElement };
+  (i || d.querySelector('[data-cancel]')).focus(); if (i) i.select();
+}
+function close() { if (!open) return; open.d.hidden = true; if (open.from && open.from.focus) open.from.focus(); open = null; }
+document.addEventListener('click', function (e) {
+  var row = e.target.closest('.cl-clip'); if (row) pick(row);
+  var b = e.target.closest('button'); if (!b) return;
+  if (b.hasAttribute('data-tab')) {
+    $$('.cl-tab').forEach(function (o) { o.setAttribute('aria-selected', o === b ? 'true' : 'false'); });
+    $$('[data-panel]').forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== b.getAttribute('data-tab'); });
+  }
+  var g = b.closest('.cl-seg');
+  if (g) $$('button', g).forEach(function (o) { o.setAttribute('aria-checked', o === b ? 'true' : 'false'); });
+  if (b.hasAttribute('data-copy')) say('Copié');
+  if (b.hasAttribute('data-delete')) show('delete');
+  if (b.hasAttribute('data-rename')) show('rename');
+  if (b.hasAttribute('data-cancel')) close();
+  if (b.hasAttribute('data-confirm')) {
+    var r = current(), next = r && (r.nextElementSibling || r.previousElementSibling);
+    if (r) r.remove(); open.from = null; close(); count(); pick(next);
+  }
+  if (b.hasAttribute('data-confirm-rename')) {
+    var v = open.d.querySelector('input').value.trim(), c = current();
+    if (v && c) { c.setAttribute('data-file', v + '.mp4'); c.querySelector('.cl-clip__file').textContent = v + '.mp4'; pick(c); }
+    close();
+  }
+  if (b.hasAttribute('data-capture')) {
+    var cell = b.parentNode, before = cell.innerHTML;
+    cell.innerHTML = '<span class="cl-capture">Appuyez sur la combinaison</span><span class="cl-kbd"><kbd>Échap</kbd></span>';
+    var done = function (ev) { ev.preventDefault(); document.removeEventListener('keydown', done, true); cell.innerHTML = before; };
+    document.addEventListener('keydown', done, true);
+  }
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape' && open) return close();
+  var row = e.target.closest && e.target.closest('.cl-clip');
+  if (row && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+    var n = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+    if (n) { n.focus(); pick(n); } e.preventDefault();
+  }
+  if (row && e.key === 'Delete') show('delete');
+  if (row && e.key === 'F2') show('rename');
+});
+document.addEventListener('input', function (e) {
+  if (e.target.hasAttribute('data-duration')) $$('[data-seconds]').forEach(function (n) { n.textContent = e.target.value; });
+});
+</script>
+</body>
+</html>

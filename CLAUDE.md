@@ -4,6 +4,7 @@ Replay buffer minimal pour Windows, en Rust : au raccourci, sauvegarde les 30 de
 
 - Le quoi et le pourquoi, avec la liste YAGNI et l'avancement : [docs/scope.md](docs/scope.md)
 - Le comment (crates, modules, threads, types, tests) : [docs/architecture.md](docs/architecture.md)
+- L'apparence (couleurs, composants, textes de l'interface) : [docs/design-system/README.md](docs/design-system/README.md). Le code suit le design system, pas l'inverse.
 
 ## Principes (dans cet ordre en cas de conflit)
 
