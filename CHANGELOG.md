@@ -5,42 +5,42 @@
 
 ### Features
 
-* icône définitive et barre de titre aux couleurs du design system ([#19](https://github.com/HugoBernier/clipper/issues/19)) ([ae11ca2](https://github.com/HugoBernier/clipper/commit/ae11ca2da0c43b2b615f309efa81af6a7f469b0e))
+* icône définitive et barre de titre aux couleurs du design system ([#19](https://github.com/HugoBernier/clipper/issues/19)) ([8070d25](https://github.com/HugoBernier/clipper/commit/8070d252a4efe2ff60ac57ff385d559d6913617f))
 
 ## [0.6.0](https://github.com/HugoBernier/clipper/compare/v0.5.1...v0.6.0) (2026-10-09)
 
 
 ### Features
 
-* **ui:** appliquer le design system à la fenêtre ([#17](https://github.com/HugoBernier/clipper/issues/17)) ([bb682a9](https://github.com/HugoBernier/clipper/commit/bb682a9ebd4ac54d7a703110411ad7ee21c54612))
+* **ui:** appliquer le design system à la fenêtre ([#17](https://github.com/HugoBernier/clipper/issues/17)) ([78e6beb](https://github.com/HugoBernier/clipper/commit/78e6beba2aa62925158fc2a0402c53af1be8abee))
 
 ## [0.5.1](https://github.com/HugoBernier/clipper/compare/v0.5.0...v0.5.1) (2026-10-09)
 
 
 ### Bug Fixes
 
-* **config:** retirer 120 et 144 fps ([#14](https://github.com/HugoBernier/clipper/issues/14)) ([56daf2d](https://github.com/HugoBernier/clipper/commit/56daf2ddc133a8f1cc72d4e171469ad739b1fc2e))
+* **config:** retirer 120 et 144 fps ([#14](https://github.com/HugoBernier/clipper/issues/14)) ([8e75f2b](https://github.com/HugoBernier/clipper/commit/8e75f2b5fa969e737f442441c06f438d94c2613e))
 
 ## [0.5.0](https://github.com/HugoBernier/clipper/compare/v0.4.1...v0.5.0) (2026-10-09)
 
 
 ### Features
 
-* **audio:** choisir le micro et suivre le changement de périphérique ([#12](https://github.com/HugoBernier/clipper/issues/12)) ([46f930c](https://github.com/HugoBernier/clipper/commit/46f930cc1764a4e12a213dac14cda10d92476420))
+* **audio:** choisir le micro et suivre le changement de périphérique ([#12](https://github.com/HugoBernier/clipper/issues/12)) ([083f1ed](https://github.com/HugoBernier/clipper/commit/083f1edbc4b65ce8f9f461d20966e01443897a43))
 
 ## [0.4.1](https://github.com/HugoBernier/clipper/compare/v0.4.0...v0.4.1) (2026-10-09)
 
 
 ### Bug Fixes
 
-* démarrer sur un PC à deux GPU et signaler un arrêt ([#10](https://github.com/HugoBernier/clipper/issues/10)) ([e04f277](https://github.com/HugoBernier/clipper/commit/e04f2778c3c02e2b9c245ab6c306f7248afe6757))
+* démarrer sur un PC à deux GPU et signaler un arrêt ([#10](https://github.com/HugoBernier/clipper/issues/10)) ([c9e8e6a](https://github.com/HugoBernier/clipper/commit/c9e8e6a0032131cf47e7dbaf752310387de3e213))
 
 ## [0.4.0](https://github.com/HugoBernier/clipper/compare/v0.3.0...v0.4.0) (2026-10-09)
 
 
 ### Features
 
-* revoir et partager ses clips depuis la fenêtre ([#8](https://github.com/HugoBernier/clipper/issues/8)) ([faa492c](https://github.com/HugoBernier/clipper/commit/faa492c87f51c3addbb63a9e206605455866d85b))
+* revoir et partager ses clips depuis la fenêtre ([#8](https://github.com/HugoBernier/clipper/issues/8)) ([208d2fe](https://github.com/HugoBernier/clipper/commit/208d2fe7a6d2686d610f3190cfa50f2538f04355))
 
 ## [0.3.0](https://github.com/HugoBernier/clipper/compare/v0.2.0...v0.3.0) (2026-10-09)
 
@@ -51,23 +51,23 @@
 
 ### Features
 
-* régler Clipper depuis une fenêtre (qualité, durée, micro, dossier, raccourci) ([#5](https://github.com/HugoBernier/clipper/issues/5)) ([6cfb19b](https://github.com/HugoBernier/clipper/commit/6cfb19bba1be1566edfb621a84b646a95099754c))
+* régler Clipper depuis une fenêtre (qualité, durée, micro, dossier, raccourci) ([#5](https://github.com/HugoBernier/clipper/issues/5)) ([cd85cad](https://github.com/HugoBernier/clipper/commit/cd85cad693c06ace85b03738d88069bbf85b13d2))
 
 
 ### Bug Fixes
 
-* ouvrir les listes au bon endroit et rendre le clavier à la fenêtre ([#7](https://github.com/HugoBernier/clipper/issues/7)) ([eb1fdf8](https://github.com/HugoBernier/clipper/commit/eb1fdf87fe7e17edf7e101f70f86a48df95e9876))
+* ouvrir les listes au bon endroit et rendre le clavier à la fenêtre ([#7](https://github.com/HugoBernier/clipper/issues/7)) ([0c7542a](https://github.com/HugoBernier/clipper/commit/0c7542ac5089eeb94a2a8037f81d19f6461596d9))
 
 ## [0.2.0](https://github.com/HugoBernier/clipper/compare/v0.1.1...v0.2.0) (2026-10-09)
 
 
 ### Features
 
-* **tray:** changer la qualité à chaud depuis le menu de l'icône ([9bd008c](https://github.com/HugoBernier/clipper/commit/9bd008cde4cfbe792ce15ae5dfd249162c949f75))
+* **tray:** changer la qualité à chaud depuis le menu de l'icône ([c081b35](https://github.com/HugoBernier/clipper/commit/c081b3595ca2f6c2fcaea58d01a2401442b6f854))
 
 ## [0.1.1](https://github.com/HugoBernier/clipper/compare/v0.1.0...v0.1.1) (2026-10-08)
 
 
 ### Bug Fixes
 
-* **audio:** mixer le micro en mono sur les deux canaux ([5ee2781](https://github.com/HugoBernier/clipper/commit/5ee2781ebe8c4af97e5f04fb591f87e8ca438271))
+* **audio:** mixer le micro en mono sur les deux canaux ([258a1f2](https://github.com/HugoBernier/clipper/commit/258a1f2328257ecf1a8bb09e50ffc35e3b3dc9cb))
