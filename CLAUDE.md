@@ -19,7 +19,7 @@ En cas de doute, le moins de code gagne.
 - **Toolchain** : Rust stable, edition 2024, cible `x86_64-pc-windows-msvc`.
 - **Crates autorisées** : `windows`, `wasapi`, `serde`, `toml`, `anyhow`, `log`, `simplelog`, `webview2-com` (fenêtre, itérations 9 à 11) ; en build-dependency, `embed-resource` (icône et version dans l'exe). Toute autre crate se demande d'abord.
 - **Erreurs** : `anyhow::Result` partout, et `.context("…")` sur chaque appel COM ou Win32. Pas de `unwrap()` hors tests.
-- **`unsafe`** : seulement dans `mf.rs`, `video.rs`, `audio.rs`, `save.rs` et `main.rs` pour la boucle de messages et le bip (`RegisterHotKey`, `GetMessageW`, `MessageBeep`). Chaque bloc porte un commentaire `// SAFETY:`. `ring.rs`, `config.rs` et `mix.rs` ont `#![forbid(unsafe_code)]`. `tray.rs` (icône, menu, registre) peut aussi contenir de l'`unsafe`.
+- **`unsafe`** : seulement dans `mf.rs`, `video.rs`, `audio.rs`, `save.rs`, `ui.rs` (fenêtre WebView2, sélecteur de dossier) et `main.rs` pour l'initialisation, la boucle de messages et le bip (`OleInitialize`, `SetProcessDpiAwarenessContext`, `RegisterHotKey`, `GetMessageW`, `MessageBeep`). Chaque bloc porte un commentaire `// SAFETY:`. `ring.rs`, `config.rs` et `mix.rs` ont `#![forbid(unsafe_code)]`. `tray.rs` (icône, menu, registre) peut aussi contenir de l'`unsafe`.
 - **Pas de console en release** : `#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]`.
 - **Anti-cheat** : aucune injection, aucun `SetWindowsHookEx`. On passe uniquement par WGC et `RegisterHotKey`.
 - **Horloge** : tous les timestamps sont en unités de 100 ns, dérivés de QPC.

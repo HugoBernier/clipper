@@ -32,6 +32,7 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
 use windows::core::{IInspectable, Interface, Ref};
 
+use crate::config::{self, Quality};
 use crate::mf::{self, SEC, VideoFormat};
 use crate::ring::{Packet, Ring};
 
@@ -74,7 +75,7 @@ impl Video {
 pub fn spawn(
     height: u32,
     fps: u32,
-    bitrate: u32,
+    quality: Quality,
     ring: Arc<Mutex<Ring>>,
     main_thread: u32,
 ) -> Result<Video> {
@@ -84,7 +85,7 @@ pub fn spawn(
     let thread = std::thread::Builder::new()
         .name("video".into())
         .spawn(move || {
-            if let Err(e) = run(height, fps, bitrate, &ring, &thread_stop, &ready_tx) {
+            if let Err(e) = run(height, fps, quality, &ring, &thread_stop, &ready_tx) {
                 error!("vidéo arrêtée : {e:#}");
                 let _ = ready_tx.send(Err(anyhow!("{e:#}")));
                 // SAFETY: simple envoi de message au thread principal.
@@ -106,7 +107,7 @@ pub fn spawn(
 fn run(
     height: u32,
     fps: u32,
-    bitrate: u32,
+    quality: Quality,
     ring: &Mutex<Ring>,
     stop: &AtomicBool,
     ready: &Sender<Result<VideoFormat>>,
@@ -117,6 +118,7 @@ fn run(
     let src = item.Size()?;
     // Hauteur fixe, largeur au ratio de l'écran (3440x1440 → 1720x720), paire pour NV12.
     let width = (src.Width as u32 * height / src.Height as u32) & !1;
+    let bitrate = config::video_bitrate(quality, width, height, fps);
     let format = VideoFormat {
         width,
         height,

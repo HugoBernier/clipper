@@ -5,6 +5,7 @@
 //! (la loopback ne livre rien quand rien ne joue) et coupe les chevauchements.
 
 use std::mem::ManuallyDrop;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -15,7 +16,7 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::CoTaskMemFree;
 
 use crate::mf::{self, AudioFormat, SEC};
-use crate::mix::{Mixer, downmix_to_mono};
+use crate::mix::{Mixer, apply_volume, downmix_to_mono};
 use crate::ring::{Packet, Ring};
 
 pub const RATE: u32 = 48_000;
@@ -97,10 +98,30 @@ fn to_frames(duration: i64) -> u64 {
 struct SendBox<T>(T);
 unsafe impl<T> Send for SendBox<T> {}
 
+/// Réglages du micro, modifiables à chaud par le thread principal.
+pub struct Microphone {
+    pub enabled: AtomicBool,
+    /// En % (100 = inchangé).
+    pub volume: AtomicU32,
+}
+
+impl Microphone {
+    pub fn new(enabled: bool, volume: u32) -> Self {
+        Self {
+            enabled: AtomicBool::new(enabled),
+            volume: AtomicU32::new(volume),
+        }
+    }
+}
+
 /// Démarre capture, mixage et encodage dans un thread dédié ; renvoie le format AAC
 /// une fois l'encodeur prêt. Une perte de périphérique est réessayée (silence
 /// entre-temps), sans jamais bloquer l'autre source.
-pub fn spawn(bitrate: u32, microphone: bool, ring: Arc<Mutex<Ring>>) -> Result<AudioFormat> {
+pub fn spawn(
+    bitrate: u32,
+    microphone: Arc<Microphone>,
+    ring: Arc<Mutex<Ring>>,
+) -> Result<AudioFormat> {
     let (ready_tx, ready_rx) = channel();
     std::thread::Builder::new()
         .name("audio".into())
@@ -117,7 +138,7 @@ pub fn spawn(bitrate: u32, microphone: bool, ring: Arc<Mutex<Ring>>) -> Result<A
 
 fn run(
     bitrate: u32,
-    microphone: bool,
+    microphone: Arc<Microphone>,
     ring: &Mutex<Ring>,
     ready: &Sender<Result<AudioFormat>>,
 ) -> Result<()> {
@@ -126,10 +147,12 @@ fn run(
     let _ = ready.send(Ok(encoder.format()?));
     // Origine commune : l'échantillon k de chaque source tombe au même instant.
     let origin = mf::now();
-    let mut inputs = vec![Input::new(Source::System, 0, origin)];
-    if microphone {
-        inputs.push(Input::new(Source::Microphone, 1, origin));
-    }
+    // Le micro coupé reste une source (muette, sans périphérique ouvert) : le
+    // réactiver ne décale rien.
+    let mut inputs = vec![
+        Input::new(Source::System, 0, origin),
+        Input::new(Source::Microphone(microphone), 1, origin),
+    ];
     let mut mixer = Mixer::new(inputs.len());
     let mut encoded: u64 = 0;
     loop {
@@ -149,27 +172,43 @@ fn frames_duration(frames: u64) -> i64 {
     (frames * SEC as u64 / u64::from(RATE)) as i64
 }
 
-#[derive(Clone, Copy)]
 enum Source {
     /// Son du PC : loopback du périphérique de sortie par défaut.
     System,
     /// Micro de communication par défaut (celui de Discord).
-    Microphone,
+    Microphone(Arc<Microphone>),
 }
 
 impl Source {
-    fn name(self) -> &'static str {
+    fn name(&self) -> &'static str {
         match self {
             Source::System => "son du PC",
-            Source::Microphone => "micro",
+            Source::Microphone(_) => "micro",
         }
     }
 
-    fn open(self) -> Result<(Capture, String)> {
+    /// Faux pour le micro coupé : aucun périphérique ouvert, donc pas d'icône « micro
+    /// utilisé » dans la barre des tâches.
+    fn enabled(&self) -> bool {
+        match self {
+            Source::System => true,
+            Source::Microphone(mic) => mic.enabled.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Volume à appliquer (le micro est aussi ramené en mono), `None` pour le son du PC.
+    fn volume(&self) -> Option<u32> {
+        match self {
+            Source::System => None,
+            Source::Microphone(mic) => Some(mic.volume.load(Ordering::Relaxed)),
+        }
+    }
+
+    fn open(&self) -> Result<(Capture, String)> {
         let enumerator = wasapi::DeviceEnumerator::new()?;
         let device = match self {
             Source::System => enumerator.get_default_device(&wasapi::Direction::Render)?,
-            Source::Microphone => enumerator.get_default_device_for_role(
+            Source::Microphone(_) => enumerator.get_default_device_for_role(
                 &wasapi::Direction::Capture,
                 &wasapi::Role::Communications,
             )?,
@@ -231,7 +270,12 @@ impl Input {
     }
 
     fn poll(&mut self, mixer: &mut Mixer) {
-        if self.capture.is_none() && Instant::now() >= self.retry_at {
+        if !self.source.enabled() {
+            if self.capture.take().is_some() {
+                info!("capture {} arrêtée", self.source.name());
+            }
+            self.failing = false;
+        } else if self.capture.is_none() && Instant::now() >= self.retry_at {
             match self.source.open() {
                 Ok((capture, device)) => {
                     info!("capture {} : {device}", self.source.name());
@@ -246,7 +290,7 @@ impl Input {
                 &capture.reader,
                 &mut self.timeline,
                 self.index,
-                matches!(self.source, Source::Microphone),
+                self.source.volume(),
                 mixer,
             )
         {
@@ -270,12 +314,13 @@ impl Input {
     }
 }
 
-/// Lit tous les paquets disponibles et les place sur la timeline de la source.
+/// Lit tous les paquets disponibles et les place sur la timeline de la source. Avec un
+/// `volume` (micro), le signal est ramené en mono puis mis à ce volume.
 fn read_packets(
     reader: &wasapi::AudioCaptureClient,
     timeline: &mut Timeline,
     index: usize,
-    mono: bool,
+    volume: Option<u32>,
     mixer: &mut Mixer,
 ) -> Result<()> {
     let mut pcm = Vec::new();
@@ -307,8 +352,9 @@ fn read_packets(
                 .iter()
                 .map(|b| i16::from_le_bytes(*b))
                 .collect();
-            if mono {
+            if let Some(volume) = volume {
                 downmix_to_mono(&mut samples);
+                apply_volume(&mut samples, volume);
             }
             mixer.push(index, &samples);
         }

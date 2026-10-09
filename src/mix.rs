@@ -51,6 +51,18 @@ pub fn downmix_to_mono(stereo: &mut [i16]) {
     }
 }
 
+/// Volume en % (100 = inchangé), saturé à ±32767 au-delà de 100.
+pub fn apply_volume(samples: &mut [i16], percent: u32) {
+    if percent == 100 {
+        return;
+    }
+    let percent = i64::from(percent);
+    for s in samples {
+        let scaled = i64::from(*s) * percent / 100;
+        *s = scaled.clamp(i16::MIN.into(), i16::MAX.into()) as i16;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +86,36 @@ mod tests {
         let mut s = [i16::MAX, i16::MAX, i16::MIN, i16::MIN];
         downmix_to_mono(&mut s);
         assert_eq!(s, [i16::MAX, i16::MAX, i16::MIN, i16::MIN]);
+    }
+
+    #[test]
+    fn volume_100_leaves_the_signal_unchanged() {
+        let mut s = [1000, -1000, 7];
+        apply_volume(&mut s, 100);
+        assert_eq!(s, [1000, -1000, 7]);
+    }
+
+    #[test]
+    fn volume_0_mutes() {
+        let mut s = [1000, -1000, i16::MIN];
+        apply_volume(&mut s, 0);
+        assert_eq!(s, [0, 0, 0]);
+    }
+
+    #[test]
+    fn volume_scales_the_signal() {
+        let mut s = [1000, -1000, 3];
+        apply_volume(&mut s, 50);
+        assert_eq!(s, [500, -500, 1]);
+        apply_volume(&mut s, 200);
+        assert_eq!(s, [1000, -1000, 2]);
+    }
+
+    #[test]
+    fn volume_200_saturates() {
+        let mut s = [20_000, -20_000, i16::MIN];
+        apply_volume(&mut s, 200);
+        assert_eq!(s, [i16::MAX, i16::MIN, i16::MIN]);
     }
 
     #[test]

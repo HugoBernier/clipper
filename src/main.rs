@@ -7,6 +7,7 @@ mod mix;
 mod ring;
 mod save;
 mod tray;
+mod ui;
 mod video;
 
 use std::path::{Path, PathBuf};
@@ -18,22 +19,29 @@ use anyhow::{Context, Result, anyhow, bail};
 use log::{error, info, warn};
 use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::System::Threading::{CreateMutexW, GetCurrentThreadId};
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey,
+    HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MB_ICONHAND, MB_OK, MESSAGEBOX_STYLE, MSG, TranslateMessage,
     WM_HOTKEY,
 };
 
-use crate::config::{Config, PRESETS, parse_hotkey};
+use crate::audio::Microphone;
+use crate::config::{Config, Hotkey, parse_hotkey};
 use crate::mf::{AudioFormat, SEC, VideoFormat};
 use crate::ring::Ring;
 use crate::video::Video;
 
 /// AAC 160 kb/s (débits possibles de l'encodeur Windows : 96, 128, 160, 192).
 const AUDIO_BPS: u32 = 160_000;
+/// Identifiant du raccourci global (un seul).
+const HOTKEY_ID: i32 = 1;
 /// Délai max d'une sauvegarde en cours quand on quitte.
 const QUIT_WAIT: Duration = Duration::from_secs(10);
 /// Délai max pour que l'encodeur rattrape l'instant de l'appui.
@@ -114,41 +122,32 @@ fn beep(ok: bool) {
 }
 
 fn run() -> Result<()> {
+    // Fenêtre et icône nettes à toutes les échelles d'affichage.
+    // SAFETY: réglage du processus, avant toute création de fenêtre.
+    if let Err(e) =
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
+    {
+        warn!("mise à l'échelle DPI : {e:#}");
+    }
+    // STA : exigé par WebView2 (fenêtre) et par les boîtes de dialogue du Shell.
+    // SAFETY: initialisation OLE du thread principal, une fois.
+    unsafe { OleInitialize(None) }.context("OleInitialize")?;
     let exe = std::env::current_exe()?;
     let exe_dir = exe.parent().context("dossier de l'exe")?;
     let config_path = exe_dir.join("clipper.toml");
-    let mut config = Config::load_or_create(&config_path)?;
+    let config = Config::load_or_create(&config_path)?;
     let hotkey = parse_hotkey(&config.hotkey)?;
-    let bitrate = config.video_bitrate(AUDIO_BPS)?;
-    let clip = i64::from(config.clip_seconds) * SEC;
     let out_dir = save::videos_dir()?.join(&config.output_dir);
 
-    // + 1 GOP : le clip démarre à la keyframe qui précède le début voulu.
-    let ring = Arc::new(Mutex::new(Ring::new(clip + SEC)));
-    // SAFETY: GetCurrentThreadId n'a pas de précondition.
-    let main_thread = unsafe { GetCurrentThreadId() };
-    let mut video = video::spawn(
-        config.height,
-        config.fps,
-        bitrate,
-        ring.clone(),
-        main_thread,
-    )?;
+    let ring = Arc::new(Mutex::new(Ring::new(keep(&config))));
+    let video = spawn_video(&config, &ring)?;
+    let microphone = Arc::new(Microphone::new(config.microphone, config.microphone_volume));
     // Sans audio (aucune sortie son, encodeur absent), on garde au moins la vidéo.
-    let audio = audio::spawn(AUDIO_BPS, config.microphone, ring.clone())
+    let audio = audio::spawn(AUDIO_BPS, microphone.clone(), ring.clone())
         .inspect_err(|e| warn!("clips sans son : {e:#}"))
         .ok();
-
-    // SAFETY: raccourci global lié au thread courant (hwnd nul) ; pas de hook clavier.
-    unsafe {
-        RegisterHotKey(
-            None,
-            1,
-            HOT_KEY_MODIFIERS(hotkey.modifiers) | MOD_NOREPEAT,
-            hotkey.vk,
-        )
-    }
-    .with_context(|| format!("raccourci {} indisponible (déjà pris ?)", config.hotkey))?;
+    register_hotkey(&hotkey)
+        .with_context(|| format!("raccourci {} indisponible (déjà pris ?)", config.hotkey))?;
     info!(
         "prêt : {} sauvegarde les {} dernières secondes dans {}",
         config.hotkey,
@@ -156,52 +155,86 @@ fn run() -> Result<()> {
         out_dir.display()
     );
     // Sans icône (Explorateur absent…), Clipper reste utilisable au raccourci.
-    let _tray = tray::Tray::new(
-        out_dir.clone(),
-        format!(
-            "Clipper — {} : {} dernières secondes",
-            config.hotkey, config.clip_seconds
-        ),
-    )
-    .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
-    .ok();
-    tray::set_preset(config.preset());
+    let tray = tray::Tray::new(out_dir.clone(), tooltip(&config))
+        .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
+        .ok();
+    tray::set_microphone(config.microphone);
+    let mut app = App {
+        config,
+        config_path,
+        out_dir,
+        ring,
+        video,
+        microphone,
+        tray,
+    };
 
     let saving = Arc::new(AtomicBool::new(false));
     let mut msg = MSG::default();
     // SAFETY: boucle de messages standard du thread courant.
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
-        if msg.message == tray::WM_QUALITY {
-            let preset = msg.wParam.0;
-            let mut ring = ring.clone();
-            if let Err(e) = change_quality(preset, &mut config, &config_path, &mut video, &mut ring)
-            {
-                error!("changement de qualité : {e:#}");
-                beep(false);
+        match msg.message {
+            tray::WM_MICROPHONE => {
+                let on = !app.config.microphone;
+                app.change_and_report("microphone", &on.to_string());
             }
-            continue;
-        }
-        if msg.message != WM_HOTKEY {
-            // Messages de la fenêtre cachée de l'icône.
-            // SAFETY: message reçu par GetMessageW, transmis tel quel.
-            unsafe {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
+            ui::WM_UI => {
+                for request in ui::take_requests() {
+                    let reply = app.handle_ui(&request);
+                    ui::post(&reply);
+                }
             }
-            continue;
+            WM_HOTKEY => app.save(&saving, audio.as_ref()),
+            _ => {
+                // Messages des fenêtres (icône, réglages).
+                // SAFETY: message reçu par GetMessageW, transmis tel quel.
+                unsafe {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
         }
+    }
+    // WM_QUIT avec wParam 1 : le thread vidéo s'est arrêté sur une erreur (déjà loguée).
+    if msg.wParam.0 == 1 {
+        bail!("arrêt : erreur vidéo");
+    }
+    // « Quitter » : on laisse finir une sauvegarde en cours.
+    let deadline = Instant::now() + QUIT_WAIT;
+    while saving.load(Ordering::SeqCst) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    info!("arrêt demandé");
+    Ok(())
+}
+
+/// Ce que les réglages changent à chaud, possédé par le thread principal.
+struct App {
+    config: Config,
+    config_path: PathBuf,
+    out_dir: PathBuf,
+    ring: Arc<Mutex<Ring>>,
+    video: Video,
+    microphone: Arc<Microphone>,
+    tray: Option<tray::Tray>,
+}
+
+impl App {
+    /// Appui sur le raccourci : sauvegarde dans un thread, une seule à la fois.
+    fn save(&self, saving: &Arc<AtomicBool>, audio: Option<&AudioFormat>) {
         let pressed = mf::now();
         // Comme OBS : une seule sauvegarde à la fois, l'appui suivant est ignoré.
         if saving.swap(true, Ordering::SeqCst) {
             warn!("sauvegarde déjà en cours, appui ignoré");
-            continue;
+            return;
         }
+        let clip = i64::from(self.config.clip_seconds) * SEC;
         let (ring, saving, out_dir, audio, format) = (
-            ring.clone(),
+            self.ring.clone(),
             saving.clone(),
-            out_dir.clone(),
-            audio.clone(),
-            video.format,
+            self.out_dir.clone(),
+            audio.cloned(),
+            self.video.format,
         );
         std::thread::spawn(move || {
             match save_clip(&ring, pressed, clip, &format, audio.as_ref(), &out_dir) {
@@ -217,46 +250,168 @@ fn run() -> Result<()> {
             saving.store(false, Ordering::SeqCst);
         });
     }
-    // WM_QUIT avec wParam 1 : le thread vidéo s'est arrêté sur une erreur (déjà loguée).
-    if msg.wParam.0 == 1 {
-        bail!("arrêt : erreur vidéo");
+
+    /// Message de la fenêtre ; la réponse est toujours l'état complet, avec l'erreur
+    /// éventuelle.
+    fn handle_ui(&mut self, request: &str) -> String {
+        let (command, arg) = request.split_once('\n').unwrap_or((request, ""));
+        let result = match command {
+            "get" => Ok(()),
+            "set" => match arg.split_once('=') {
+                Some((key, value)) => self.change(key, value),
+                None => Err(anyhow!("réglage mal formé : {arg}")),
+            },
+            "pick_folder" => ui::pick_folder(&self.out_dir).and_then(|picked| match picked {
+                Some(dir) => self.change("output_dir", &dir.display().to_string()),
+                None => Ok(()),
+            }),
+            "startup" => tray::set_startup(arg == "true"),
+            _ => Err(anyhow!("commande inconnue : {command}")),
+        };
+        let mut state = self.state();
+        if let Err(e) = result {
+            warn!("réglage refusé : {e:#}");
+            state.push_str(&format!("error={e:#}\n"));
+        }
+        state
     }
-    // « Quitter » : on laisse finir une sauvegarde en cours.
-    let deadline = Instant::now() + QUIT_WAIT;
-    while saving.load(Ordering::SeqCst) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
+
+    /// Changement venu d'ailleurs que la fenêtre (menu de l'icône) : la fenêtre, si elle
+    /// est ouverte, suit.
+    fn change_and_report(&mut self, key: &str, value: &str) {
+        if let Err(e) = self.change(key, value) {
+            error!("réglage {key} : {e:#}");
+            beep(false);
+        }
+        ui::post(&self.state());
     }
-    info!("arrêt demandé");
-    Ok(())
+
+    /// Applique un réglage sans relancer Clipper, puis l'enregistre. Seul ce qui dépend
+    /// du réglage redémarre : la vidéo pour la résolution, les fps ou la qualité ;
+    /// l'audio n'est jamais interrompu.
+    fn change(&mut self, key: &str, value: &str) -> Result<()> {
+        let mut next = self.config.clone();
+        next.set(key, value)?;
+        if next.hotkey != self.config.hotkey {
+            change_hotkey(&self.config.hotkey, &next.hotkey)?;
+        }
+        if (next.height, next.fps, next.quality)
+            != (self.config.height, self.config.fps, self.config.quality)
+        {
+            self.restart_video(&next)?;
+        }
+        self.ring
+            .lock()
+            .map_err(|_| anyhow!("ring empoisonné"))?
+            .set_keep(keep(&next));
+        self.microphone
+            .enabled
+            .store(next.microphone, Ordering::Relaxed);
+        self.microphone
+            .volume
+            .store(next.microphone_volume, Ordering::Relaxed);
+        tray::set_microphone(next.microphone);
+        self.out_dir = save::videos_dir()?.join(&next.output_dir);
+        tray::set_clips_dir(self.out_dir.clone());
+        if let Some(tray) = &self.tray {
+            tray.set_tooltip(&tooltip(&next));
+        }
+        self.config = next;
+        info!("réglage : {key} = {value}");
+        self.config.save(&self.config_path)
+    }
+
+    /// Nouveau format vidéo : buffer vidé (ses images n'ont plus le format de
+    /// l'encodeur). Si le nouveau format échoue, l'ancien est relancé.
+    fn restart_video(&mut self, next: &Config) -> Result<()> {
+        self.video.stop();
+        self.ring
+            .lock()
+            .map_err(|_| anyhow!("ring empoisonné"))?
+            .clear();
+        match spawn_video(next, &self.ring) {
+            Ok(video) => {
+                self.video = video;
+                Ok(())
+            }
+            Err(e) => {
+                self.video = spawn_video(&self.config, &self.ring)
+                    .context("ancien format vidéo non relancé")?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Réglages et valeurs calculées, au format lu par `ui.html`.
+    fn state(&self) -> String {
+        let format = &self.video.format;
+        let mut state = String::from("state\n");
+        for (key, value) in self.config.pairs() {
+            state.push_str(&format!("{key}={value}\n"));
+        }
+        let estimate = config::estimated_mb(format.bitrate, AUDIO_BPS, self.config.clip_seconds);
+        state.push_str(&format!(
+            "clips_dir={}\nstartup={}\nwidth={}\nestimate_mb={estimate:.0}\nbitrate_mbps={:.1}\n",
+            self.out_dir.display(),
+            tray::startup_enabled(),
+            format.width,
+            f64::from(format.bitrate) / 1e6,
+        ));
+        state
+    }
 }
 
-/// Applique un préréglage de qualité : config réécrite, pipeline vidéo redémarré au
-/// nouveau format, buffer vidé (ses images n'ont plus le format de l'encodeur).
-/// L'audio continue sans interruption.
-fn change_quality(
-    preset: usize,
-    config: &mut Config,
-    config_path: &Path,
-    video: &mut Video,
-    ring: &mut Arc<Mutex<Ring>>,
-) -> Result<()> {
-    let chosen = PRESETS.get(preset).context("préréglage inconnu")?;
-    config.apply(chosen);
-    config.save(config_path)?;
-    let bitrate = config.video_bitrate(AUDIO_BPS)?;
-    video.stop();
-    ring.lock().map_err(|_| anyhow!("ring empoisonné"))?.clear();
+/// Durée gardée en mémoire : le clip + 1 GOP (il démarre à la keyframe qui précède).
+fn keep(config: &Config) -> i64 {
+    i64::from(config.clip_seconds) * SEC + SEC
+}
+
+fn spawn_video(config: &Config, ring: &Arc<Mutex<Ring>>) -> Result<Video> {
     // SAFETY: GetCurrentThreadId n'a pas de précondition.
     let main_thread = unsafe { GetCurrentThreadId() };
-    *video = video::spawn(
+    let video = video::spawn(
         config.height,
         config.fps,
-        bitrate,
+        config.quality,
         ring.clone(),
         main_thread,
     )?;
-    tray::set_preset(config.preset());
-    info!("qualité : {}", chosen.name);
+    info!(
+        "taille estimée d'un clip : {:.0} Mo",
+        config::estimated_mb(video.format.bitrate, AUDIO_BPS, config.clip_seconds)
+    );
+    Ok(video)
+}
+
+fn tooltip(config: &Config) -> String {
+    format!(
+        "Clipper — {} : {} dernières secondes",
+        config.hotkey, config.clip_seconds
+    )
+}
+
+fn register_hotkey(hotkey: &Hotkey) -> Result<()> {
+    // SAFETY: raccourci global lié au thread courant (hwnd nul) ; pas de hook clavier.
+    unsafe {
+        RegisterHotKey(
+            None,
+            HOTKEY_ID,
+            HOT_KEY_MODIFIERS(hotkey.modifiers) | MOD_NOREPEAT,
+            hotkey.vk,
+        )
+    }
+    .context("RegisterHotKey")
+}
+
+/// Remplace le raccourci ; s'il est déjà pris, l'ancien est remis.
+fn change_hotkey(old: &str, new: &str) -> Result<()> {
+    let new_key = parse_hotkey(new)?;
+    // SAFETY: désenregistre le raccourci de ce thread.
+    unsafe { UnregisterHotKey(None, HOTKEY_ID) }.context("UnregisterHotKey")?;
+    if let Err(e) = register_hotkey(&new_key) {
+        register_hotkey(&parse_hotkey(old)?).context("ancien raccourci non remis")?;
+        return Err(e.context(format!("raccourci {new} indisponible (déjà pris ?)")));
+    }
     Ok(())
 }
 

@@ -9,23 +9,72 @@ use serde::{Deserialize, Serialize};
 /// Mesuré au spike A : le CBR AMF dépasse la cible de 6-7 % même avec VBV d'1 s.
 const BITRATE_MARGIN: f64 = 0.10;
 const MIN_VIDEO_BPS: u32 = 500_000;
+/// Bits par pixel en « Moyenne » à 60 i/s : redonne le débit de la 0.1 (4,25 Mb/s en
+/// 1720×720, l'écran 21:9 de référence, quand la taille visait 19 Mo pour 30 s).
+const MEDIUM_BITS_PER_PIXEL: f64 = 0.0572;
+/// Deux images voisines se ressemblent d'autant plus que les fps montent : le débit
+/// croît moins vite qu'eux (débits conseillés par YouTube : 1440p60 ≈ 1,5 × 1440p30).
+const FPS_EXPONENT: f64 = 0.6;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    /// Durée d'un clip, en secondes.
+    /// Durée d'un clip, en secondes (10 à 300).
     pub clip_seconds: u32,
     /// Hauteur de sortie ; la largeur suit le ratio de l'écran.
     pub height: u32,
     pub fps: u32,
-    /// Taille maximale d'un clip, en Mo (10^6 octets). Limite Discord gratuite : 20.
-    pub target_mb: f64,
+    pub quality: Quality,
     /// Ex. "Alt+F10", "Ctrl+Shift+S".
     pub hotkey: String,
     /// Relatif au dossier Vidéos de Windows, ou absolu.
     pub output_dir: PathBuf,
     /// Mixer le micro de communication (celui de Discord) au son du PC.
     pub microphone: bool,
+    /// Volume du micro dans le clip, en % (0 à 200).
+    pub microphone_volume: u32,
+    /// Taille cible de la 0.1 : lue pour accepter un ancien fichier, jamais réécrite.
+    #[serde(skip_serializing)]
+    target_mb: Option<f64>,
+}
+
+/// Niveau de qualité : fixe le débit, donc la netteté ; la taille suit la durée.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Quality {
+    Low,
+    #[default]
+    Medium,
+    High,
+    VeryHigh,
+}
+
+impl Quality {
+    const ALL: [Quality; 4] = [
+        Quality::Low,
+        Quality::Medium,
+        Quality::High,
+        Quality::VeryHigh,
+    ];
+
+    /// Nom dans `clipper.toml` et dans la fenêtre de réglages.
+    fn as_str(self) -> &'static str {
+        match self {
+            Quality::Low => "low",
+            Quality::Medium => "medium",
+            Quality::High => "high",
+            Quality::VeryHigh => "very_high",
+        }
+    }
+
+    fn factor(self) -> f64 {
+        match self {
+            Quality::Low => 0.5,
+            Quality::Medium => 1.0,
+            Quality::High => 1.5,
+            Quality::VeryHigh => 2.5,
+        }
+    }
 }
 
 impl Default for Config {
@@ -34,10 +83,12 @@ impl Default for Config {
             clip_seconds: 30,
             height: 720,
             fps: 60,
-            target_mb: 19.0,
+            quality: Quality::default(),
             hotkey: "Alt+F10".into(),
             output_dir: "Clipper".into(),
             microphone: true,
+            microphone_volume: 100,
+            target_mb: None,
         }
     }
 }
@@ -53,81 +104,102 @@ impl Config {
         let text = std::fs::read_to_string(path)?;
         let config: Self =
             toml::from_str(&text).with_context(|| format!("lecture de {}", path.display()))?;
-        ensure!(config.clip_seconds > 0, "clip_seconds doit être > 0");
-        ensure!(config.fps > 0, "fps doit être > 0");
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
         ensure!(
-            config.height >= 2 && config.height.is_multiple_of(2),
+            (10..=300).contains(&self.clip_seconds),
+            "clip_seconds doit être entre 10 et 300"
+        );
+        ensure!(self.fps > 0, "fps doit être > 0");
+        ensure!(
+            self.height >= 2 && self.height.is_multiple_of(2),
             "height doit être pair"
         );
-        Ok(config)
+        ensure!(
+            self.microphone_volume <= 200,
+            "microphone_volume doit être entre 0 et 200"
+        );
+        Ok(())
+    }
+
+    /// Change un réglage (`clé`, valeur texte, venus de la fenêtre) ; refusé et sans
+    /// effet si la config qui en résulte n'est pas valide.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let mut next = self.clone();
+        let number = || {
+            value
+                .parse::<u32>()
+                .with_context(|| format!("{key} : nombre attendu, reçu « {value} »"))
+        };
+        match key {
+            "clip_seconds" => next.clip_seconds = number()?,
+            "height" => next.height = number()?,
+            "fps" => next.fps = number()?,
+            "microphone_volume" => next.microphone_volume = number()?,
+            "quality" => {
+                next.quality = *Quality::ALL
+                    .iter()
+                    .find(|q| q.as_str() == value)
+                    .with_context(|| format!("qualité inconnue : {value}"))?;
+            }
+            "microphone" => {
+                next.microphone = value
+                    .parse()
+                    .with_context(|| format!("microphone : true ou false, reçu « {value} »"))?;
+            }
+            "hotkey" => {
+                parse_hotkey(value)?;
+                next.hotkey = value.into();
+            }
+            "output_dir" => {
+                ensure!(!value.is_empty(), "dossier des clips vide");
+                next.output_dir = value.into();
+            }
+            _ => bail!("réglage inconnu : {key}"),
+        }
+        next.validate()?;
+        *self = next;
+        Ok(())
+    }
+
+    /// Les réglages en `(clé, valeur)`, au format qu'accepte `set`.
+    pub fn pairs(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("clip_seconds", self.clip_seconds.to_string()),
+            ("height", self.height.to_string()),
+            ("fps", self.fps.to_string()),
+            ("quality", self.quality.as_str().into()),
+            ("hotkey", self.hotkey.clone()),
+            ("output_dir", self.output_dir.display().to_string()),
+            ("microphone", self.microphone.to_string()),
+            ("microphone_volume", self.microphone_volume.to_string()),
+        ]
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
         std::fs::write(path, toml::to_string_pretty(self)?)
             .with_context(|| format!("écriture de {}", path.display()))
     }
-
-    /// Débit vidéo pour qu'un clip (+ 1 s de GOP au pire) tienne sous `target_mb`.
-    pub fn video_bitrate(&self, audio_bps: u32) -> Result<u32> {
-        video_bitrate(self.target_mb, self.clip_seconds, 1, audio_bps)
-    }
-
-    /// Index du préréglage qui correspond à la config, `None` si elle est personnalisée.
-    pub fn preset(&self) -> Option<usize> {
-        PRESETS.iter().position(|p| {
-            p.height == self.height && p.fps == self.fps && p.target_mb == self.target_mb
-        })
-    }
-
-    pub fn apply(&mut self, preset: &Preset) {
-        self.height = preset.height;
-        self.fps = preset.fps;
-        self.target_mb = preset.target_mb;
-    }
 }
 
-/// Préréglage de qualité, choisi depuis le menu de l'icône : rien d'autre qu'un trio
-/// hauteur / fps / taille cible, écrit tel quel dans la config.
-pub struct Preset {
-    pub name: &'static str,
-    pub height: u32,
-    pub fps: u32,
-    pub target_mb: f64,
+/// Débit vidéo d'une sortie `width`×`height` à `fps` pour un niveau de qualité.
+pub fn video_bitrate(quality: Quality, width: u32, height: u32, fps: u32) -> u32 {
+    let pixels = f64::from(width) * f64::from(height) * 60.0;
+    let bps = MEDIUM_BITS_PER_PIXEL
+        * quality.factor()
+        * pixels
+        * (f64::from(fps) / 60.0).powf(FPS_EXPONENT);
+    (bps as u32).max(MIN_VIDEO_BPS)
 }
 
-/// Tailles cibles sous les limites d'upload de Discord : 20 Mo (gratuit), 50 Mo (Nitro
-/// Basic). À débit fixe, une résolution plus basse rend mieux en mouvement.
-pub const PRESETS: [Preset; 3] = [
-    Preset {
-        name: "Discord gratuit : 720p, 60 i/s",
-        height: 720,
-        fps: 60,
-        target_mb: 19.0,
-    },
-    Preset {
-        name: "Discord gratuit, plus net : 1080p, 30 i/s",
-        height: 1080,
-        fps: 30,
-        target_mb: 19.0,
-    },
-    Preset {
-        name: "Discord Nitro Basic : 1440p, 60 i/s",
-        height: 1440,
-        fps: 60,
-        target_mb: 48.0,
-    },
-];
-
-pub fn video_bitrate(target_mb: f64, clip_s: u32, gop_s: u32, audio_bps: u32) -> Result<u32> {
-    let total_bps = target_mb * 1e6 * 8.0 * (1.0 - BITRATE_MARGIN) / f64::from(clip_s + gop_s);
-    let video_bps = total_bps - f64::from(audio_bps);
-    ensure!(
-        video_bps >= f64::from(MIN_VIDEO_BPS),
-        "target_mb trop petit : {:.0} kb/s de vidéo (minimum {})",
-        video_bps / 1000.0,
-        MIN_VIDEO_BPS / 1000
-    );
-    Ok(video_bps as u32)
+/// Taille d'un clip à prévoir, en Mo (10^6 octets) : dépassement de l'encodeur compris,
+/// et 1 s de plus au pire (le clip démarre à la keyframe qui précède).
+pub fn estimated_mb(video_bps: u32, audio_bps: u32, clip_seconds: u32) -> f64 {
+    let bps = f64::from(video_bps) * (1.0 + BITRATE_MARGIN) + f64::from(audio_bps);
+    bps * f64::from(clip_seconds + 1) / 8e6
 }
 
 /// Modificateurs au format de `RegisterHotKey` (MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN).
@@ -175,16 +247,49 @@ fn virtual_key(key: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    /// Sortie 720p de l'écran 21:9 de référence (3440×1440).
+    const UW_720: (u32, u32) = (1720, 720);
+
     #[test]
-    fn default_bitrate_fits_discord() {
-        // 19 Mo × 8 × 0,9 / 31 s − 160 kb/s d'audio ≈ 4,25 Mb/s
-        let bps = Config::default().video_bitrate(160_000).unwrap();
-        assert_eq!(bps / 1000, 4252);
+    fn medium_720p60_keeps_the_previous_bitrate() {
+        // 0.1.x : 19 Mo × 8 × 0,9 / 31 s − 160 kb/s d'audio ≈ 4,25 Mb/s.
+        let bps = video_bitrate(Quality::Medium, UW_720.0, UW_720.1, 60);
+        assert_eq!(bps / 10_000, 425);
     }
 
     #[test]
-    fn bitrate_too_low_is_an_error() {
-        assert!(video_bitrate(1.0, 30, 1, 160_000).is_err());
+    fn bitrate_follows_quality() {
+        let at = |q| video_bitrate(q, 1920, 1080, 60);
+        assert!(at(Quality::Low) < at(Quality::Medium));
+        assert!(at(Quality::Medium) < at(Quality::High));
+        assert!(at(Quality::High) < at(Quality::VeryHigh));
+    }
+
+    #[test]
+    fn bitrate_follows_pixels() {
+        let p720 = video_bitrate(Quality::Medium, 1280, 720, 60);
+        let p1440 = video_bitrate(Quality::Medium, 2560, 1440, 60);
+        assert_eq!(p1440 / 1000, p720 * 4 / 1000);
+    }
+
+    #[test]
+    fn doubling_fps_costs_about_half_more() {
+        // Comme les débits conseillés par YouTube : 1440p60 ≈ 1,5 × 1440p30.
+        let p30 = f64::from(video_bitrate(Quality::Medium, 2560, 1440, 30));
+        let p60 = f64::from(video_bitrate(Quality::Medium, 2560, 1440, 60));
+        assert!((1.45..1.6).contains(&(p60 / p30)), "{}", p60 / p30);
+    }
+
+    #[test]
+    fn bitrate_has_a_floor() {
+        assert_eq!(video_bitrate(Quality::Low, 64, 36, 30), MIN_VIDEO_BPS);
+    }
+
+    #[test]
+    fn estimate_covers_encoder_overshoot_and_one_gop() {
+        // (4 Mb/s × 1,1 + 160 kb/s) × 31 s / 8 = 17,67 Mo
+        let mb = estimated_mb(4_000_000, 160_000, 30);
+        assert!((mb - 17.67).abs() < 0.01, "{mb}");
     }
 
     #[test]
@@ -236,7 +341,9 @@ mod tests {
         let config: Config = toml::from_str("clip_seconds = 20").unwrap();
         assert_eq!(config.clip_seconds, 20);
         assert_eq!(config.fps, 60);
+        assert_eq!(config.quality, Quality::Medium);
         assert!(config.microphone);
+        assert_eq!(config.microphone_volume, 100);
     }
 
     #[test]
@@ -246,55 +353,153 @@ mod tests {
     }
 
     #[test]
-    fn default_config_is_the_first_preset() {
-        assert_eq!(Config::default().preset(), Some(0));
+    fn quality_is_written_in_snake_case() {
+        let config: Config = toml::from_str(r#"quality = "very_high""#).unwrap();
+        assert_eq!(config.quality, Quality::VeryHigh);
+        assert!(
+            toml::to_string(&config)
+                .unwrap()
+                .contains(r#"quality = "very_high""#)
+        );
     }
 
     #[test]
-    fn applying_a_preset_selects_it() {
-        let mut config = Config::default();
-        config.apply(&PRESETS[2]);
-        assert_eq!(config.preset(), Some(2));
-        assert_eq!((config.height, config.fps), (1440, 60));
-    }
-
-    #[test]
-    fn hand_tuned_config_matches_no_preset() {
-        let config = Config {
-            height: 900,
-            ..Config::default()
-        };
-        assert_eq!(config.preset(), None);
-    }
-
-    #[test]
-    fn every_preset_has_a_usable_bitrate() {
-        for p in &PRESETS {
-            let mut config = Config::default();
-            config.apply(p);
-            assert!(config.video_bitrate(160_000).is_ok(), "{}", p.name);
-            assert!(p.height.is_multiple_of(2), "{}", p.name);
+    fn window_and_file_use_the_same_quality_names() {
+        for q in Quality::ALL {
+            let text = toml::to_string(&Config {
+                quality: q,
+                ..Config::default()
+            })
+            .unwrap();
+            assert!(
+                text.contains(&format!(r#"quality = "{}""#, q.as_str())),
+                "{text}"
+            );
         }
     }
 
     #[test]
-    fn saved_preset_survives_a_reload() {
-        let path = std::env::temp_dir().join(format!("clipper-preset-{}.toml", std::process::id()));
-        let mut config = Config::default();
-        config.apply(&PRESETS[1]);
+    fn reads_a_0_1_config_and_drops_target_mb() {
+        let old = r#"
+clip_seconds = 30
+height = 1440
+fps = 60
+target_mb = 48.0
+hotkey = "Ctrl+Shift+S"
+output_dir = "Clipper"
+microphone = true
+"#;
+        let path = temp_path("old");
+        std::fs::write(&path, old).unwrap();
+        let config = Config::load_or_create(&path).unwrap();
+        assert_eq!((config.height, config.fps), (1440, 60));
+        assert_eq!(config.hotkey, "Ctrl+Shift+S");
+        assert_eq!(config.quality, Quality::Medium);
         config.save(&path).unwrap();
-        let read = Config::load_or_create(&path).unwrap();
+        let rewritten = std::fs::read_to_string(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert_eq!(read.preset(), Some(1));
+        assert!(!rewritten.contains("target_mb"), "{rewritten}");
+    }
+
+    #[test]
+    fn duration_must_stay_between_10_s_and_5_min() {
+        for (seconds, ok) in [(9, false), (10, true), (300, true), (301, false)] {
+            let config = Config {
+                clip_seconds: seconds,
+                ..Config::default()
+            };
+            assert_eq!(config.validate().is_ok(), ok, "{seconds} s");
+        }
+    }
+
+    #[test]
+    fn microphone_volume_must_stay_between_0_and_200() {
+        for (volume, ok) in [(0, true), (200, true), (201, false)] {
+            let config = Config {
+                microphone_volume: volume,
+                ..Config::default()
+            };
+            assert_eq!(config.validate().is_ok(), ok, "{volume} %");
+        }
+    }
+
+    #[test]
+    fn odd_height_or_zero_fps_is_an_error() {
+        let odd = Config {
+            height: 721,
+            ..Config::default()
+        };
+        let still = Config {
+            fps: 0,
+            ..Config::default()
+        };
+        assert!(odd.validate().is_err());
+        assert!(still.validate().is_err());
+        assert!(Config::default().validate().is_ok());
     }
 
     #[test]
     fn creates_default_file_then_reads_it_back() {
-        let path = std::env::temp_dir().join(format!("clipper-test-{}.toml", std::process::id()));
+        let path = temp_path("new");
         let _ = std::fs::remove_file(&path);
         let created = Config::load_or_create(&path).unwrap();
         let read = Config::load_or_create(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
         assert_eq!(created.hotkey, read.hotkey);
+        assert_eq!(created.quality, read.quality);
+    }
+
+    #[test]
+    fn set_changes_one_setting() {
+        let mut config = Config::default();
+        config.set("height", "1440").unwrap();
+        config.set("fps", "144").unwrap();
+        config.set("quality", "very_high").unwrap();
+        config.set("clip_seconds", "120").unwrap();
+        config.set("microphone", "false").unwrap();
+        config.set("microphone_volume", "150").unwrap();
+        config.set("hotkey", "Ctrl+Shift+S").unwrap();
+        config.set("output_dir", r"D:\Clips").unwrap();
+        assert_eq!((config.height, config.fps), (1440, 144));
+        assert_eq!(config.quality, Quality::VeryHigh);
+        assert_eq!(config.clip_seconds, 120);
+        assert!(!config.microphone);
+        assert_eq!(config.microphone_volume, 150);
+        assert_eq!(config.hotkey, "Ctrl+Shift+S");
+        assert_eq!(config.output_dir, PathBuf::from(r"D:\Clips"));
+    }
+
+    #[test]
+    fn invalid_set_leaves_the_config_unchanged() {
+        let mut config = Config::default();
+        for (key, value) in [
+            ("clip_seconds", "5"),
+            ("clip_seconds", "trente"),
+            ("microphone_volume", "300"),
+            ("quality", "ultra"),
+            ("hotkey", "Alt+Tab"),
+            ("microphone", "oui"),
+            ("output_dir", ""),
+            ("couleur", "bleu"),
+        ] {
+            assert!(config.set(key, value).is_err(), "{key}={value}");
+        }
+        assert_eq!(config.pairs(), Config::default().pairs());
+    }
+
+    #[test]
+    fn pairs_round_trip_through_set() {
+        let mut config = Config::default();
+        config.set("quality", "high").unwrap();
+        config.set("output_dir", r"C:\Vidéos\Clips").unwrap();
+        let mut copy = Config::default();
+        for (key, value) in config.pairs() {
+            copy.set(key, &value).unwrap();
+        }
+        assert_eq!(copy.pairs(), config.pairs());
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("clipper-{name}-{}.toml", std::process::id()))
     }
 }
