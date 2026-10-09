@@ -35,7 +35,7 @@ Fichier `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), 
 |---|---|---|
 | `clip_seconds` | `30` | Durée d'un clip, en secondes (10 à 300) |
 | `height` | `720` | Hauteur de sortie (720, 1080, 1440) ; la largeur suit le ratio de l'écran |
-| `fps` | `60` | Images par seconde (30, 60, 120, 144) |
+| `fps` | `60` | Images par seconde (30 ou 60) |
 | `quality` | `"medium"` | `low`, `medium`, `high` ou `very_high` : fixe le débit ; la taille suit la durée |
 | `hotkey` | `"Alt+F10"` | Raccourci (ex. `"Ctrl+Shift+S"`, touches F1–F24, A–Z, 0–9) |
 | `output_dir` | `"Clipper"` | Dossier des clips, relatif au dossier Vidéos ou absolu |

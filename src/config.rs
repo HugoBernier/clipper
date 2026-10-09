@@ -15,6 +15,9 @@ const MEDIUM_BITS_PER_PIXEL: f64 = 0.0572;
 /// Deux images voisines se ressemblent d'autant plus que les fps montent : le débit
 /// croît moins vite qu'eux (débits conseillés par YouTube : 1440p60 ≈ 1,5 × 1440p30).
 const FPS_EXPONENT: f64 = 0.6;
+/// WGC ne livre pas plus d'environ 60 images/s (lever cette limite demande Windows 11
+/// 24H2) : au-delà, l'encodeur ne ferait que répéter des images.
+const MAX_FPS: u32 = 60;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -110,6 +113,8 @@ impl Config {
         // La 0.1 acceptait toute durée > 0 : on la ramène dans les bornes plutôt que de
         // refuser de démarrer.
         config.clip_seconds = config.clip_seconds.clamp(10, 300);
+        // Idem pour les 120 et 144 fps proposés jusqu'à la 0.5.
+        config.fps = config.fps.min(MAX_FPS);
         config.validate()?;
         Ok(config)
     }
@@ -119,7 +124,10 @@ impl Config {
             (10..=300).contains(&self.clip_seconds),
             "clip_seconds doit être entre 10 et 300"
         );
-        ensure!(self.fps > 0, "fps doit être > 0");
+        ensure!(
+            (1..=MAX_FPS).contains(&self.fps),
+            "fps doit être entre 1 et {MAX_FPS}"
+        );
         ensure!(
             self.height >= 2 && self.height.is_multiple_of(2),
             "height doit être pair"
@@ -373,6 +381,23 @@ mod tests {
     }
 
     #[test]
+    fn fps_above_60_from_an_old_file_is_capped() {
+        // Les 0.3 à 0.5 proposaient 120 et 144 fps.
+        let path = temp_path("fps-144");
+        std::fs::write(&path, "fps = 144").unwrap();
+        let config = Config::load_or_create(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(config.fps, 60);
+    }
+
+    #[test]
+    fn fps_above_60_is_refused() {
+        let mut config = Config::default();
+        assert!(config.set("fps", "120").is_err());
+        assert_eq!(config.fps, 60);
+    }
+
+    #[test]
     fn unknown_field_is_an_error() {
         assert!(toml::from_str::<Config>("clip_second = 30").is_err());
     }
@@ -494,14 +519,14 @@ microphone = true
     fn set_changes_one_setting() {
         let mut config = Config::default();
         config.set("height", "1440").unwrap();
-        config.set("fps", "144").unwrap();
+        config.set("fps", "30").unwrap();
         config.set("quality", "very_high").unwrap();
         config.set("clip_seconds", "120").unwrap();
         config.set("microphone", "false").unwrap();
         config.set("microphone_volume", "150").unwrap();
         config.set("hotkey", "Ctrl+Shift+S").unwrap();
         config.set("output_dir", r"D:\Clips").unwrap();
-        assert_eq!((config.height, config.fps), (1440, 144));
+        assert_eq!((config.height, config.fps), (1440, 30));
         assert_eq!(config.quality, Quality::VeryHigh);
         assert_eq!(config.clip_seconds, 120);
         assert!(!config.microphone);
