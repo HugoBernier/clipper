@@ -10,6 +10,7 @@ mod tray;
 mod ui;
 mod video;
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,8 +18,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use log::{error, info, warn};
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, GetLastError};
+use windows::Win32::Foundation::{
+    ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
+};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::OleInitialize;
 use windows::Win32::System::Threading::{CreateMutexW, GetCurrentThreadId};
 use windows::Win32::UI::HiDpi::{
@@ -28,9 +32,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, MB_ICONHAND, MB_OK, MESSAGEBOX_STYLE, MSG, TranslateMessage,
-    WM_HOTKEY,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONHAND,
+    MB_OK, MESSAGEBOX_STYLE, MSG, RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_HOTKEY, WNDCLASSW,
 };
+use windows::core::w;
 
 use crate::audio::Microphone;
 use crate::config::{Config, Hotkey, parse_hotkey};
@@ -146,7 +152,8 @@ fn run() -> Result<()> {
     let audio = audio::spawn(AUDIO_BPS, microphone.clone(), ring.clone())
         .inspect_err(|e| warn!("clips sans son : {e:#}"))
         .ok();
-    register_hotkey(&hotkey)
+    let hotkey_window = create_hotkey_window()?;
+    register_hotkey(hotkey_window, &hotkey)
         .with_context(|| format!("raccourci {} indisponible (déjà pris ?)", config.hotkey))?;
     info!(
         "prêt : {} sauvegarde les {} dernières secondes dans {}",
@@ -159,34 +166,37 @@ fn run() -> Result<()> {
         .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
         .ok();
     tray::set_microphone(config.microphone);
-    let mut app = App {
-        config,
-        config_path,
-        out_dir,
-        ring,
-        video,
-        microphone,
-        tray,
-        saving: Arc::new(AtomicBool::new(false)),
-    };
+    let saving = Arc::new(AtomicBool::new(false));
+    APP.with_borrow_mut(|app| {
+        *app = Some(App {
+            config,
+            config_path,
+            out_dir,
+            ring,
+            video,
+            audio,
+            microphone,
+            tray,
+            hotkey_window,
+            saving: saving.clone(),
+        })
+    });
 
     let mut msg = MSG::default();
     // SAFETY: boucle de messages standard du thread courant.
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
         match msg.message {
-            tray::WM_MICROPHONE => {
+            tray::WM_MICROPHONE => with_app(|app| {
                 let on = !app.config.microphone;
                 app.change_and_report("microphone", &on.to_string());
-            }
+            }),
             ui::WM_UI => {
                 for request in ui::take_requests() {
-                    let reply = app.handle_ui(&request);
-                    ui::post(&reply);
+                    handle_ui(&request);
                 }
             }
-            WM_HOTKEY => app.save(audio.as_ref()),
             _ => {
-                // Messages des fenêtres (icône, réglages).
+                // Messages des fenêtres (icône, réglages, raccourci).
                 // SAFETY: message reçu par GetMessageW, transmis tel quel.
                 unsafe {
                     let _ = TranslateMessage(&msg);
@@ -200,7 +210,8 @@ fn run() -> Result<()> {
         bail!("arrêt : erreur vidéo");
     }
     // « Quitter » : on laisse finir une sauvegarde en cours.
-    app.wait_for_save();
+    wait_for_save(&saving);
+    APP.with_borrow_mut(|app| *app = None);
     info!("arrêt demandé");
     Ok(())
 }
@@ -214,13 +225,71 @@ struct App {
     video: Video,
     microphone: Arc<Microphone>,
     tray: Option<tray::Tray>,
+    audio: Option<AudioFormat>,
+    /// Reçoit WM_HOTKEY (voir `create_hotkey_window`).
+    hotkey_window: HWND,
     /// Une sauvegarde est en cours.
     saving: Arc<AtomicBool>,
 }
 
+thread_local! {
+    /// L'état du thread principal, aussi atteint par la procédure de la fenêtre du
+    /// raccourci.
+    static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+}
+
+/// Exécute `f` sur l'état. Une boucle modale ouverte pendant un emprunt (aucune ne
+/// l'est : voir `handle_ui`) rendrait l'état indisponible ; l'appel est alors ignoré.
+fn with_app(f: impl FnOnce(&mut App)) {
+    APP.with(|app| match app.try_borrow_mut() {
+        Ok(mut app) => {
+            if let Some(app) = app.as_mut() {
+                f(app);
+            }
+        }
+        Err(_) => error!("état occupé : message ignoré"),
+    });
+}
+
+/// Message de la fenêtre : la réponse est toujours l'état complet, avec l'erreur
+/// éventuelle.
+fn handle_ui(request: &str) {
+    let (command, arg) = request.split_once('\n').unwrap_or((request, ""));
+    // Le sélecteur de dossier est une boucle modale : on l'ouvre sans tenir l'état,
+    // pour qu'un appui sur le raccourci pendant ce temps soit traité.
+    let mut picked = Ok(None);
+    if command == "pick_folder" {
+        let mut current = PathBuf::new();
+        with_app(|app| current = app.out_dir.clone());
+        picked = ui::pick_folder(&current);
+    }
+    with_app(|app| {
+        let result = match command {
+            "get" => Ok(()),
+            "set" => match arg.split_once('=') {
+                Some((key, value)) => app.change(key, value),
+                None => Err(anyhow!("réglage mal formé : {arg}")),
+            },
+            "pick_folder" => match picked {
+                Ok(Some(dir)) => app.change("output_dir", &dir.display().to_string()),
+                Ok(None) => Ok(()),
+                Err(e) => Err(e),
+            },
+            "startup" => tray::set_startup(arg == "true"),
+            _ => Err(anyhow!("commande inconnue : {command}")),
+        };
+        let mut state = app.state();
+        if let Err(e) = result {
+            warn!("réglage refusé : {e:#}");
+            state.push_str(&format!("error={e:#}\n"));
+        }
+        ui::post(&state);
+    });
+}
+
 impl App {
     /// Appui sur le raccourci : sauvegarde dans un thread, une seule à la fois.
-    fn save(&self, audio: Option<&AudioFormat>) {
+    fn save(&self) {
         let pressed = mf::now();
         // Comme OBS : une seule sauvegarde à la fois, l'appui suivant est ignoré.
         if self.saving.swap(true, Ordering::SeqCst) {
@@ -232,7 +301,7 @@ impl App {
             self.ring.clone(),
             self.saving.clone(),
             self.out_dir.clone(),
-            audio.cloned(),
+            self.audio.clone(),
             self.video.format,
         );
         std::thread::spawn(move || {
@@ -248,31 +317,6 @@ impl App {
             }
             saving.store(false, Ordering::SeqCst);
         });
-    }
-
-    /// Message de la fenêtre ; la réponse est toujours l'état complet, avec l'erreur
-    /// éventuelle.
-    fn handle_ui(&mut self, request: &str) -> String {
-        let (command, arg) = request.split_once('\n').unwrap_or((request, ""));
-        let result = match command {
-            "get" => Ok(()),
-            "set" => match arg.split_once('=') {
-                Some((key, value)) => self.change(key, value),
-                None => Err(anyhow!("réglage mal formé : {arg}")),
-            },
-            "pick_folder" => ui::pick_folder(&self.out_dir).and_then(|picked| match picked {
-                Some(dir) => self.change("output_dir", &dir.display().to_string()),
-                None => Ok(()),
-            }),
-            "startup" => tray::set_startup(arg == "true"),
-            _ => Err(anyhow!("commande inconnue : {command}")),
-        };
-        let mut state = self.state();
-        if let Err(e) = result {
-            warn!("réglage refusé : {e:#}");
-            state.push_str(&format!("error={e:#}\n"));
-        }
-        state
     }
 
     /// Changement venu d'ailleurs que la fenêtre (menu de l'icône) : la fenêtre, si elle
@@ -292,7 +336,7 @@ impl App {
         let mut next = self.config.clone();
         next.set(key, value)?;
         if next.hotkey != self.config.hotkey {
-            change_hotkey(&self.config.hotkey, &next.hotkey)?;
+            change_hotkey(self.hotkey_window, &self.config.hotkey, &next.hotkey)?;
         }
         if (next.height, next.fps, next.quality)
             != (self.config.height, self.config.fps, self.config.quality)
@@ -324,7 +368,7 @@ impl App {
     /// l'encodeur). Si le nouveau format échoue, l'ancien est relancé.
     fn restart_video(&mut self, next: &Config) -> Result<()> {
         // La sauvegarde en cours lit le buffer au format actuel.
-        self.wait_for_save();
+        wait_for_save(&self.saving);
         self.video.stop();
         self.ring
             .lock()
@@ -340,13 +384,6 @@ impl App {
                     .context("ancien format vidéo non relancé")?;
                 Err(e)
             }
-        }
-    }
-
-    fn wait_for_save(&self) {
-        let deadline = Instant::now() + SAVE_WAIT;
-        while self.saving.load(Ordering::SeqCst) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
         }
     }
 
@@ -367,6 +404,57 @@ impl App {
         ));
         state
     }
+}
+
+fn wait_for_save(saving: &AtomicBool) {
+    let deadline = Instant::now() + SAVE_WAIT;
+    while saving.load(Ordering::SeqCst) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Fenêtre invisible (message-only) qui reçoit WM_HOTKEY. Un raccourci lié au thread
+/// arriverait comme message de thread, que les boucles modales (menu de l'icône,
+/// sélecteur de dossier) jettent ; celles-ci distribuent en revanche les messages des
+/// fenêtres.
+fn create_hotkey_window() -> Result<HWND> {
+    // SAFETY: classe et fenêtre Win32 classiques, créées et utilisées sur ce thread.
+    unsafe {
+        let instance = GetModuleHandleW(None).context("GetModuleHandleW")?;
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(hotkey_proc),
+            hInstance: instance.into(),
+            lpszClassName: w!("ClipperHotkey"),
+            ..Default::default()
+        };
+        if RegisterClassW(&class) == 0 {
+            bail!("RegisterClassW (raccourci)");
+        }
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            w!("ClipperHotkey"),
+            None,
+            WINDOW_STYLE::default(),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .context("CreateWindowExW (raccourci)")
+    }
+}
+
+extern "system" fn hotkey_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if msg == WM_HOTKEY {
+        with_app(|app| app.save());
+        return LRESULT(0);
+    }
+    // SAFETY: traitement par défaut des autres messages.
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// Durée gardée en mémoire : le clip + 1 GOP (il démarre à la keyframe qui précède).
@@ -398,11 +486,11 @@ fn tooltip(config: &Config) -> String {
     )
 }
 
-fn register_hotkey(hotkey: &Hotkey) -> Result<()> {
-    // SAFETY: raccourci global lié au thread courant (hwnd nul) ; pas de hook clavier.
+fn register_hotkey(window: HWND, hotkey: &Hotkey) -> Result<()> {
+    // SAFETY: raccourci global lié à notre fenêtre du raccourci ; pas de hook clavier.
     unsafe {
         RegisterHotKey(
-            None,
+            Some(window),
             HOTKEY_ID,
             HOT_KEY_MODIFIERS(hotkey.modifiers) | MOD_NOREPEAT,
             hotkey.vk,
@@ -412,12 +500,12 @@ fn register_hotkey(hotkey: &Hotkey) -> Result<()> {
 }
 
 /// Remplace le raccourci ; s'il est déjà pris, l'ancien est remis.
-fn change_hotkey(old: &str, new: &str) -> Result<()> {
+fn change_hotkey(window: HWND, old: &str, new: &str) -> Result<()> {
     let new_key = parse_hotkey(new)?;
-    // SAFETY: désenregistre le raccourci de ce thread.
-    unsafe { UnregisterHotKey(None, HOTKEY_ID) }.context("UnregisterHotKey")?;
-    if let Err(e) = register_hotkey(&new_key) {
-        register_hotkey(&parse_hotkey(old)?).context("ancien raccourci non remis")?;
+    // SAFETY: désenregistre le raccourci de notre fenêtre.
+    unsafe { UnregisterHotKey(Some(window), HOTKEY_ID) }.context("UnregisterHotKey")?;
+    if let Err(e) = register_hotkey(window, &new_key) {
+        register_hotkey(window, &parse_hotkey(old)?).context("ancien raccourci non remis")?;
         return Err(e.context(format!("raccourci {new} indisponible (déjà pris ?)")));
     }
     Ok(())

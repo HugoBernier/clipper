@@ -64,6 +64,7 @@ installer/   # clipper.iss (Inno Setup)
 
 - Un Mutex plutôt que des canaux : moins de code, et la section critique se limite à des clones d'`Arc`.
 - La sauvegarde n'encode rien et ne bloque donc jamais la capture.
+- **Raccourci** : enregistré sur une fenêtre invisible (message-only), pas sur le thread. Les boucles modales (menu de l'icône, sélecteur de dossier) jettent les messages de thread mais distribuent ceux des fenêtres : un appui pendant qu'un menu est ouvert n'est pas perdu. L'état du thread principal (`App`) est donc atteint depuis cette procédure de fenêtre (`thread_local` + `try_borrow_mut`) ; aucune boucle modale ne s'ouvre pendant qu'il est emprunté.
 - La résolution de sortie ne suit pas l'écran : l'encodeur n'est réinitialisé que si l'utilisateur change la résolution, les fps ou la qualité (buffer vidé, audio ininterrompu).
 - **Fenêtre** (itération 9) : sur le thread principal. Le moteur WebView2 est créé de façon asynchrone à l'ouverture (pas de boucle de messages imbriquée : un appui sur le raccourci n'est pas perdu) et détruit à la fermeture. La page envoie des lignes texte (`get`, `set\nclé=valeur`, `pick_folder`, `startup\ntrue`), mises en file puis signalées par `WM_UI` ; `App` les applique et répond par l'état complet (`state` puis `clé=valeur`). Pas de JSON : `serde_json` n'est pas une crate autorisée, et ce format suffit. Toute navigation après la page initiale est annulée (un fichier déposé sur la fenêtre ne remplace pas la page qui pilote Clipper).
 
