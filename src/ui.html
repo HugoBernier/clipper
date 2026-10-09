@@ -4,11 +4,40 @@
 <title>Clipper</title>
 <!-- Visuel brut : le design system viendra à l'itération 11. -->
 <style>
-  body { font: 14px system-ui; margin: 16px; max-width: 560px; }
+  body { font: 14px system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; }
+  nav { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid #8884; }
+  nav button[aria-selected="true"] { font-weight: bold; }
+  section { flex: 1; min-height: 0; }
+  #clips-view { display: flex; }
+  #clips-view[hidden], #settings-view[hidden] { display: none; }
+  #list { width: 340px; overflow: auto; border-right: 1px solid #8884; }
+  #list div { padding: 6px 12px; cursor: pointer; user-select: none; }
+  #list div.selected { background: #8883; }
+  #list small { display: block; opacity: .7; }
+  #viewer { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+  video { flex: 1; min-height: 0; width: 100%; background: #000; }
+  #settings-view { overflow: auto; padding: 0 16px; max-width: 560px; }
   label { display: block; margin: 12px 0; }
-  #error { color: #c00; }
+  #error, #clip-status.error { color: #c00; }
 </style>
-<h1>Réglages</h1>
+<nav>
+  <button id="tab-clips" aria-selected="true">Clips</button>
+  <button id="tab-settings" aria-selected="false">Réglages</button>
+</nav>
+<section id="clips-view">
+  <div id="list"></div>
+  <div id="viewer">
+    <video id="player" controls></video>
+    <div>
+      <button id="copy" disabled>Copier</button>
+      <button id="rename" disabled>Renommer…</button>
+      <button id="delete" disabled>Supprimer</button>
+      <button id="reveal" disabled>Montrer dans l'Explorateur</button>
+    </div>
+    <p id="clip-status" role="status"></p>
+  </div>
+</section>
+<section id="settings-view" hidden>
 <form id="form">
   <label>Résolution
     <select name="height">
@@ -50,6 +79,7 @@
   <label><input id="startup" type="checkbox"> Démarrer avec Windows</label>
 </form>
 <p id="error" role="alert"></p>
+</section>
 <script>
   const host = window.chrome.webview;
   const $ = id => document.getElementById(id);
@@ -57,9 +87,13 @@
   const send = (command, arg) => host.postMessage(arg === undefined ? command : command + '\n' + arg);
   let capturing = false;
 
-  // Rust répond toujours par l'état complet : « state » puis des lignes clé=valeur.
+  // Messages de Rust : « state » (réglages, lignes clé=valeur), « clips » (une ligne
+  // nom⇥date⇥taille⇥durée par clip), « copied », « error ».
   host.addEventListener('message', e => {
     const [kind, ...lines] = e.data.split('\n');
+    if (kind === 'clips') return showClips(lines.filter(Boolean));
+    if (kind === 'copied') return status(`Copié : ${lines[0]}. Ctrl+V dans Discord pour l'envoyer.`);
+    if (kind === 'error') return status(lines.join(' '), true);
     if (kind !== 'state') return;
     const state = Object.fromEntries(lines.map(line => {
       const i = line.indexOf('=');
@@ -115,6 +149,124 @@
     return null;
   }
 
+  // Onglets.
+  for (const [tab, view] of [['tab-clips', 'clips-view'], ['tab-settings', 'settings-view']]) {
+    $(tab).addEventListener('click', () => {
+      for (const t of ['tab-clips', 'tab-settings']) $(t).setAttribute('aria-selected', String(t === tab));
+      $('clips-view').hidden = view !== 'clips-view';
+      $('settings-view').hidden = view !== 'settings-view';
+    });
+  }
+
+  // Bibliothèque.
+  const player = $('player');
+  let current = null;
+
+  function status(text, error = false) {
+    $('clip-status').textContent = text;
+    $('clip-status').classList.toggle('error', error);
+  }
+
+  function showClips(lines) {
+    const list = $('list');
+    list.textContent = '';
+    let found = false;
+    for (const line of lines) {
+      const [name, modified, size, duration] = line.split('\t');
+      const row = document.createElement('div');
+      const date = new Date(Number(modified)).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+      row.append(name);
+      const details = document.createElement('small');
+      details.textContent = `${date} · ${formatDuration(duration)} · ${(size / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`;
+      row.append(details);
+      row.dataset.name = name;
+      row.dataset.modified = modified;
+      row.addEventListener('click', () => select(name));
+      // Le glisser HTML ne transporte pas de fichier : Rust lance un glisser natif.
+      row.addEventListener('pointerdown', down => {
+        if (down.button !== 0) return;
+        const move = m => {
+          if (Math.abs(m.clientX - down.clientX) + Math.abs(m.clientY - down.clientY) < 6) return;
+          stop();
+          send('drag', name);
+        };
+        const stop = () => {
+          removeEventListener('pointermove', move);
+          removeEventListener('pointerup', stop);
+          removeEventListener('pointercancel', stop);
+        };
+        addEventListener('pointermove', move);
+        addEventListener('pointerup', stop);
+        addEventListener('pointercancel', stop);
+      });
+      list.append(row);
+      found ||= name === current;
+    }
+    if (!lines.length) list.textContent = 'Aucun clip pour l\'instant.';
+    if (!found) unload();
+    highlight();
+  }
+
+  function formatDuration(seconds) {
+    if (!seconds) return '?';
+    const s = Math.round(Number(seconds));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  function select(name) {
+    current = name;
+    const row = [...$('list').children].find(r => r.dataset.name === name);
+    // `v` : un clip renommé puis remplacé sous le même nom n'est pas lu depuis le cache.
+    player.src = `https://clips.clipper/${encodeURIComponent(name)}?v=${row?.dataset.modified ?? ''}`;
+    player.play().catch(() => {});
+    highlight();
+  }
+
+  // Libère le fichier (lu par le lecteur) avant un renommage ou une suppression.
+  function unload() {
+    current = null;
+    player.pause();
+    player.removeAttribute('src');
+    player.load();
+    highlight();
+  }
+
+  function highlight() {
+    for (const row of $('list').children) row.classList?.toggle('selected', row.dataset.name === current);
+    for (const id of ['copy', 'rename', 'delete', 'reveal']) $(id).disabled = !current;
+  }
+
+  $('copy').addEventListener('click', () => send('copy', current));
+  $('reveal').addEventListener('click', () => send('reveal', current));
+  $('rename').addEventListener('click', () => {
+    const name = prompt('Nouveau nom du clip', current.replace(/\.mp4$/i, ''));
+    if (!name) return;
+    const old = current;
+    unload();
+    send('rename', `${old}\t${name}`);
+  });
+  $('delete').addEventListener('click', () => {
+    if (!confirm(`Mettre ${current} à la corbeille ?`)) return;
+    const old = current;
+    unload();
+    send('delete', old);
+  });
+
+  // Raccourcis du lecteur : espace, flèches (±5 s), F (plein écran). Le lecteur
+  // sélectionné gère lui-même espace et flèches.
+  document.addEventListener('keydown', e => {
+    if (capturing || $('clips-view').hidden || !current) return;
+    if (['INPUT', 'SELECT', 'BUTTON'].includes(e.target.tagName)) return;
+    const own = e.target === player;
+    if (e.code === 'Space' && !own) player.paused ? player.play() : player.pause();
+    else if (e.code === 'ArrowLeft' && !own) player.currentTime -= 5;
+    else if (e.code === 'ArrowRight' && !own) player.currentTime += 5;
+    else if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : player.requestFullscreen();
+    else return;
+    e.preventDefault();
+  });
+
   send('get');
+  send('clips');
 </script>
 </html>

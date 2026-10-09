@@ -35,7 +35,10 @@ src/
   audio.rs   # son du PC (loopback) + micro WASAPI → timelines → mixeur → MFT AAC
   mix.rs     # mixage pur de sources PCM alignées sur la même origine (TDD)
   tray.rs    # icône de notification, menu, démarrage avec Windows (dossier Démarrage)
-  ui.rs      # fenêtre Win32 + WebView2 ; ui.html : la page (réglages)
+  ui.rs      # fenêtre Win32 + WebView2 (dossier des clips servi au lecteur, plein écran) ; ui.html : la page (clips, réglages)
+  library.rs # liste des clips, durée lue dans mvhd, noms acceptés, renommage sans écrasement (pur, TDD)
+  shell.rs   # copier (CF_HDROP), glisser, corbeille, montrer dans l'Explorateur (API du Shell)
+  mp4box.rs  # en-têtes et découpage des boîtes MP4 (pur), partagé par save et library
 build.rs     # compile assets/clipper.rc (icône + version) dans l'exe
 assets/      # clipper.svg (maquette d'icône), clipper.ico, clipper.rc
 installer/   # clipper.iss (Inno Setup)
@@ -67,6 +70,7 @@ installer/   # clipper.iss (Inno Setup)
 - **Fenêtre principale** invisible (message-only) : elle reçoit le raccourci (`RegisterHotKey` lié à elle) et les demandes de l'icône et de la page (`WM_MICROPHONE`, `WM_UI`). Des messages de thread seraient jetés par les boucles modales (menu de l'icône, sélecteur de dossier), qui distribuent en revanche ceux des fenêtres : un appui pendant qu'un menu est ouvert n'est pas perdu. L'état du thread principal (`App`) est atteint depuis sa procédure (`thread_local` + `try_borrow_mut`) ; aucune boucle modale ne s'ouvre pendant qu'il est emprunté. Pendant la capture d'un nouveau raccourci, l'actuel est désenregistré (sinon Windows le prendrait avant la page) et remis à la demande suivante ou à la fermeture.
 - La résolution de sortie ne suit pas l'écran : l'encodeur n'est réinitialisé que si l'utilisateur change la résolution, les fps ou la qualité (buffer vidé, audio ininterrompu).
 - **Fenêtre** (itération 9) : sur le thread principal. Le moteur WebView2 est créé de façon asynchrone à l'ouverture (pas de boucle de messages imbriquée : un appui sur le raccourci n'est pas perdu) et détruit à la fermeture. La page envoie des lignes texte (`get`, `set\nclé=valeur`, `pick_folder`, `startup\ntrue`), mises en file puis signalées par `WM_UI` ; `App` les applique et répond par l'état complet (`state` puis `clé=valeur`). Pas de JSON : `serde_json` n'est pas une crate autorisée, et ce format suffit. Toute navigation après la page initiale est annulée (un fichier déposé sur la fenêtre ne remplace pas la page qui pilote Clipper).
+- **Bibliothèque** (itération 10) : le lecteur lit `https://clips.clipper/<nom>`, nom d'hôte virtuel que WebView2 sert depuis le dossier des clips (`SetVirtualHostNameToFolderMapping`, sans CORS). La liste lit seulement les en-têtes de boîtes et `mvhd` de chaque fichier (coût constant, pas tout le `moov`). Copier et glisser utilisent l'objet de données que l'Explorateur fournit pour un fichier (`BHID_DataObject`) : Discord le reçoit comme un fichier copié depuis l'Explorateur. Le glisser HTML ne transportant pas de fichier, la page demande un glisser natif (`SHDoDragDrop`), lancé hors de tout gestionnaire WebView2 et annulé si le bouton est déjà relâché. Glisser et corbeille ouvrent des boucles modales : ils s'exécutent sans tenir `App`. Le plein écran du lecteur met la fenêtre en plein écran sans bordure. La page libère le fichier lu avant un renommage ou une suppression ; un clip sauvegardé (`WM_CLIP_SAVED`) rafraîchit la liste.
 
 ## 4. Types
 
@@ -129,6 +133,7 @@ struct VideoFormat { width, height, fps, bitrate }       // mf.rs, commun encode
 - `video_bitrate(qualité, largeur, hauteur, fps)` : débit de la 0.1 retrouvé, ordre des niveaux, proportionnel aux pixels, fps × 2 ≈ débit × 1,5, plancher ; `estimated_mb`.
 - `Config::set` / `pairs` : chaque réglage, refus sans effet, aller-retour ; relecture d'un `clipper.toml` 0.1 (`target_mb` ignoré puis retiré).
 - `mix::apply_volume` : 0 %, 100 %, 50 %, 200 % saturé ; `Ring::set_keep`.
+- `library` : durée `mvhd` v0/v1, tronquée, `moov` devant ou derrière `mdat`, `mvhd` pas en premier ; liste (seuls les `.mp4`, du plus récent, dossier absent) ; noms refusés (`..`, séparateurs, flux NTFS, non-MP4) ; renommage (extension ajoutée, caractères et noms réservés de Windows, jamais d'écrasement).
 - Parsing de la config, y compris le raccourci (`"Ctrl+Alt+F10"`).
 - Audio : f32→i16 avec saturation, nombre d'échantillons de silence à insérer.
 

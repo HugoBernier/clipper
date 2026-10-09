@@ -2,10 +2,13 @@
 
 mod audio;
 mod config;
+mod library;
 mod mf;
 mod mix;
+mod mp4box;
 mod ring;
 mod save;
+mod shell;
 mod tray;
 mod ui;
 mod video;
@@ -16,7 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use log::{error, info, warn};
 use windows::Win32::Foundation::{
     ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
@@ -34,7 +37,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONHAND,
     MB_OK, MESSAGEBOX_STYLE, MSG, PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_HOTKEY, WNDCLASSW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY, WNDCLASSW,
 };
 use windows::core::w;
 
@@ -46,6 +49,8 @@ use crate::video::Video;
 
 /// AAC 160 kb/s (débits possibles de l'encodeur Windows : 96, 128, 160, 192).
 const AUDIO_BPS: u32 = 160_000;
+/// Envoyé par le thread de sauvegarde à la fenêtre principale.
+const WM_CLIP_SAVED: u32 = WM_APP + 4;
 /// Identifiant du raccourci global (un seul).
 const HOTKEY_ID: i32 = 1;
 /// Délai max d'une sauvegarde en cours, avant de quitter ou de changer de format.
@@ -166,6 +171,7 @@ fn run() -> Result<()> {
         .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
         .ok();
     tray::set_microphone(config.microphone);
+    ui::set_clips_dir(&out_dir);
     let saving = Arc::new(AtomicBool::new(false));
     APP.with_borrow_mut(|app| {
         *app = Some(App {
@@ -245,6 +251,10 @@ fn with_app(f: impl FnOnce(&mut App)) {
 /// éventuelle.
 fn handle_ui(request: &str) {
     let (command, arg) = request.split_once('\n').unwrap_or((request, ""));
+    if LIBRARY.contains(&command) {
+        handle_library(command, arg);
+        return;
+    }
     // Le sélecteur de dossier est une boucle modale : on l'ouvre sans tenir l'état,
     // pour qu'un appui sur le raccourci pendant ce temps soit traité.
     let mut picked = Ok(None);
@@ -289,6 +299,57 @@ fn handle_ui(request: &str) {
     });
 }
 
+/// Commandes de la bibliothèque de clips (`handle_library`).
+const LIBRARY: [&str; 6] = ["clips", "copy", "drag", "delete", "reveal", "rename"];
+
+/// Bibliothèque : l'action est faite sans tenir l'état (le glisser et la corbeille
+/// ouvrent des boucles modales), puis la liste est renvoyée si elle a pu changer.
+fn handle_library(command: &str, arg: &str) {
+    let mut dir = PathBuf::new();
+    with_app(|app| dir = app.out_dir.clone());
+    let clip = |name: &str| -> Result<PathBuf> {
+        let path = library::clip_path(&dir, name)?;
+        ensure!(path.is_file(), "clip introuvable : {name}");
+        Ok(path)
+    };
+    let owner = ui::current_hwnd();
+    let result = match command {
+        "copy" => clip(arg).and_then(|p| shell::copy(&p)),
+        "drag" => clip(arg).and_then(|p| shell::drag(owner, &p)),
+        "reveal" => clip(arg).and_then(|p| shell::reveal(&p)),
+        "delete" => clip(arg).and_then(|p| shell::recycle(owner, &p)),
+        "rename" => match arg.split_once('\t') {
+            Some((old, new)) => library::rename(&dir, old, new).map(|_| ()),
+            None => Err(anyhow!("renommage mal formé : {arg}")),
+        },
+        _ => Ok(()),
+    };
+    match &result {
+        Ok(()) if command == "copy" => ui::post(&format!("copied\n{arg}")),
+        Ok(()) => {}
+        Err(e) => {
+            warn!("{command} : {e:#}");
+            ui::post(&format!("error\n{e:#}"));
+        }
+    }
+    if matches!(command, "clips" | "delete" | "rename") {
+        post_clips(&dir);
+    }
+}
+
+fn post_clips(dir: &Path) {
+    match library::list(dir) {
+        Ok(clips) => {
+            let lines: Vec<String> = clips.iter().map(library::ClipInfo::line).collect();
+            ui::post(&format!("clips\n{}", lines.join("\n")));
+        }
+        Err(e) => {
+            warn!("liste des clips : {e:#}");
+            ui::post(&format!("error\n{e:#}"));
+        }
+    }
+}
+
 impl App {
     /// Appui sur le raccourci : sauvegarde dans un thread, une seule à la fois.
     fn save(&self) {
@@ -311,6 +372,8 @@ impl App {
                 Ok(path) => {
                     info!("clip sauvegardé : {}", path.display());
                     beep(true);
+                    // La bibliothèque ouverte affiche le nouveau clip.
+                    post_to_main(WM_CLIP_SAVED);
                 }
                 Err(e) => {
                     error!("échec de la sauvegarde : {e:#}");
@@ -360,6 +423,7 @@ impl App {
         tray::set_microphone(next.microphone);
         self.out_dir = out_dir;
         tray::set_clips_dir(self.out_dir.clone());
+        ui::set_clips_dir(&self.out_dir);
         if let Some(tray) = &self.tray {
             tray.set_tooltip(&tooltip(&next));
         }
@@ -516,6 +580,7 @@ extern "system" fn main_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
                 handle_ui(&request);
             }
         }
+        WM_CLIP_SAVED if ui::current_hwnd().is_some() => handle_ui("clips"),
         // SAFETY: traitement par défaut des autres messages.
         _ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }

@@ -2,6 +2,9 @@
 //! WebView2, le moteur d'Edge présent dans Windows. Le moteur n'existe que pendant que
 //! la fenêtre est ouverte : la fermer le libère.
 //!
+//! Les clips sont lus par le lecteur de la page à `https://clips.clipper/<nom>`, un
+//! nom d'hôte virtuel que WebView2 sert depuis le dossier des clips.
+//!
 //! Tout se passe sur le thread principal. La page envoie des messages texte, mis en file
 //! puis signalés à la fenêtre principale par `WM_UI` ; `main` les traite et répond par
 //! `post`.
@@ -14,15 +17,19 @@ use std::sync::Once;
 use anyhow::{Context, Result};
 use log::{error, info};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC, CreateCoreWebView2EnvironmentWithOptions,
-    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
-    ICoreWebView2EnvironmentOptions,
+    COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS, COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC,
+    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2_3,
+    ICoreWebView2Controller, ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
 };
 use webview2_com::{
-    CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-    NavigationStartingEventHandler, WebMessageReceivedEventHandler, take_pwstr,
+    ContainsFullScreenElementChangedEventHandler, CreateCoreWebView2ControllerCompletedHandler,
+    CreateCoreWebView2EnvironmentCompletedHandler, NavigationStartingEventHandler,
+    WebMessageReceivedEventHandler, take_pwstr,
 };
 use windows::Win32::Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
+};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
@@ -31,7 +38,7 @@ use windows::Win32::UI::Shell::{
     SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{HRESULT, HSTRING, PCWSTR, PWSTR, w};
+use windows::core::{BOOL, HRESULT, HSTRING, Interface, PCWSTR, PWSTR, w};
 
 use crate::tray;
 
@@ -39,8 +46,10 @@ use crate::tray;
 pub const WM_UI: u32 = WM_APP + 3;
 const CLASS: PCWSTR = w!("ClipperWindow");
 const PAGE: &str = include_str!("ui.html");
+/// Nom d'hôte virtuel du dossier des clips (lu par `ui.html`).
+const CLIPS_HOST: &str = "clips.clipper";
 /// Taille à 100 % d'échelle (96 dpi).
-const WIDTH: i32 = 640;
+const WIDTH: i32 = 1000;
 const HEIGHT: i32 = 720;
 
 struct Window {
@@ -48,11 +57,14 @@ struct Window {
     /// Absent tant que le moteur démarre (création asynchrone).
     controller: Option<ICoreWebView2Controller>,
     webview: Option<ICoreWebView2>,
+    /// Style et position d'avant le plein écran du lecteur.
+    restore: Option<(i32, RECT)>,
 }
 
 thread_local! {
     static WINDOW: RefCell<Option<Window>> = const { RefCell::new(None) };
     static REQUESTS: RefCell<VecDeque<String>> = const { RefCell::new(VecDeque::new()) };
+    static CLIPS_DIR: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
 }
 
 /// Ouvre la fenêtre, ou la ramène au premier plan si elle l'est déjà.
@@ -91,6 +103,7 @@ pub fn open() -> Result<()> {
             hwnd,
             controller: None,
             webview: None,
+            restore: None,
         })
     });
     // Création asynchrone, sans boucle de messages imbriquée : un appui sur le
@@ -144,6 +157,39 @@ fn request(message: &str) {
     crate::post_to_main(WM_UI);
 }
 
+/// Dossier servi au lecteur ; appliqué tout de suite si la page est ouverte.
+pub fn set_clips_dir(dir: &Path) {
+    CLIPS_DIR.with_borrow_mut(|d| *d = dir.to_path_buf());
+    let webview = WINDOW.with_borrow(|w| w.as_ref().and_then(|w| w.webview.clone()));
+    if let Some(webview) = webview
+        && let Err(e) = map_clips(&webview)
+    {
+        error!("dossier des clips pour le lecteur : {e:#}");
+    }
+}
+
+fn map_clips(webview: &ICoreWebView2) -> Result<()> {
+    let dir = CLIPS_DIR.with_borrow(Clone::clone);
+    // WebView2 refuse un dossier absent (aucun clip encore).
+    std::fs::create_dir_all(&dir).with_context(|| format!("création de {}", dir.display()))?;
+    let webview = webview
+        .cast::<ICoreWebView2_3>()
+        .context("WebView2 trop ancien (ICoreWebView2_3)")?;
+    let host = HSTRING::from(CLIPS_HOST);
+    // SAFETY: vue vivante, sur ce thread ; chaînes valides pendant l'appel.
+    unsafe {
+        // Absent au premier appel : sans importance.
+        let _ = webview.ClearVirtualHostNameToFolderMapping(&host);
+        webview
+            .SetVirtualHostNameToFolderMapping(
+                &host,
+                &HSTRING::from(dir.as_os_str()),
+                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS,
+            )
+            .context("SetVirtualHostNameToFolderMapping")
+    }
+}
+
 /// Messages de la page reçus depuis le dernier appel.
 pub fn take_requests() -> Vec<String> {
     REQUESTS.with_borrow_mut(|r| r.drain(..).collect())
@@ -181,7 +227,8 @@ pub fn pick_folder(current: &Path) -> Result<Option<PathBuf>> {
     }
 }
 
-fn current_hwnd() -> Option<HWND> {
+/// La fenêtre, si elle est ouverte (propriétaire des boîtes de dialogue).
+pub fn current_hwnd() -> Option<HWND> {
     WINDOW.with_borrow(|w| w.as_ref().map(|w| w.hwnd))
 }
 
@@ -272,12 +319,32 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
         request(&take_pwstr(message));
         Ok(())
     }));
+    // Plein écran du lecteur : sans la fenêtre, la vidéo ne remplirait que la vue.
+    let fullscreen =
+        ContainsFullScreenElementChangedEventHandler::create(Box::new(move |sender, _| {
+            let Some(webview) = sender else {
+                return Ok(());
+            };
+            let mut on = BOOL::default();
+            // SAFETY: vue valide pendant l'événement.
+            unsafe { webview.ContainsFullScreenElement(&mut on) }?;
+            if let Err(e) = set_fullscreen(hwnd, on.as_bool()) {
+                error!("plein écran : {e:#}");
+            }
+            Ok(())
+        }));
+    if let Err(e) = map_clips(&webview) {
+        error!("dossier des clips pour le lecteur : {e:#}");
+    }
     let mut token = 0;
     // SAFETY: gestionnaires COM valides, vue vivante ; ils partent avec le contrôleur.
     unsafe {
         webview
             .add_NavigationStarting(&guard, &mut token)
             .context("add_NavigationStarting")?;
+        webview
+            .add_ContainsFullScreenElementChanged(&fullscreen, &mut token)
+            .context("add_ContainsFullScreenElementChanged")?;
         webview
             .add_WebMessageReceived(&messages, &mut token)
             .context("add_WebMessageReceived")?;
@@ -294,6 +361,65 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
     fit(hwnd);
     info!("fenêtre ouverte");
     Ok(())
+}
+
+/// Fenêtre sans bordure sur tout l'écran, puis retour au style et à la place d'avant.
+fn set_fullscreen(hwnd: HWND, on: bool) -> Result<()> {
+    if on {
+        // SAFETY: notre fenêtre, sur ce thread ; MONITORINFO dimensionné.
+        let (style, rect, monitor) = unsafe {
+            let style = GetWindowLongW(hwnd, GWL_STYLE);
+            let mut rect = RECT::default();
+            GetWindowRect(hwnd, &mut rect).context("GetWindowRect")?;
+            let mut info = MONITORINFO {
+                cbSize: size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut info)
+                .ok()
+                .context("GetMonitorInfoW")?;
+            (style, rect, info.rcMonitor)
+        };
+        WINDOW.with_borrow_mut(|w| {
+            if let Some(w) = w {
+                w.restore = Some((style, rect));
+            }
+        });
+        // SAFETY: notre fenêtre, sur ce thread (aucun emprunt de WINDOW : WM_SIZE y lit).
+        unsafe {
+            SetWindowLongW(hwnd, GWL_STYLE, style & !(WS_OVERLAPPEDWINDOW.0 as i32));
+            SetWindowPos(
+                hwnd,
+                Some(HWND_TOP),
+                monitor.left,
+                monitor.top,
+                monitor.right - monitor.left,
+                monitor.bottom - monitor.top,
+                SWP_FRAMECHANGED | SWP_NOOWNERZORDER,
+            )
+            .context("SetWindowPos (plein écran)")
+        }
+    } else {
+        let Some((style, r)) =
+            WINDOW.with_borrow_mut(|w| w.as_mut().and_then(|w| w.restore.take()))
+        else {
+            return Ok(());
+        };
+        // SAFETY: notre fenêtre, sur ce thread.
+        unsafe {
+            SetWindowLongW(hwnd, GWL_STYLE, style);
+            SetWindowPos(
+                hwnd,
+                None,
+                r.left,
+                r.top,
+                r.right - r.left,
+                r.bottom - r.top,
+                SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOOWNERZORDER,
+            )
+            .context("SetWindowPos (fin du plein écran)")
+        }
+    }
 }
 
 /// Le moteur n'a pas démarré : on le dit, et on ferme la fenêtre vide.
