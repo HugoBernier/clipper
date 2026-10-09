@@ -193,13 +193,14 @@ fn run() -> Result<()> {
             DispatchMessageW(&msg);
         }
     }
+    // « Quitter » : on laisse finir une sauvegarde en cours. L'état est libéré avant
+    // de rendre la main (icône retirée), y compris après une erreur vidéo.
+    wait_for_save(&saving);
+    APP.with_borrow_mut(|app| *app = None);
     // WM_QUIT avec wParam 1 : le thread vidéo s'est arrêté sur une erreur (déjà loguée).
     if msg.wParam.0 == 1 {
         bail!("arrêt : erreur vidéo");
     }
-    // « Quitter » : on laisse finir une sauvegarde en cours.
-    wait_for_save(&saving);
-    APP.with_borrow_mut(|app| *app = None);
     info!("arrêt demandé");
     Ok(())
 }
@@ -269,22 +270,22 @@ fn handle_ui(request: &str) {
             "startup" => tray::set_startup(arg == "true"),
             _ => Err(anyhow!("commande inconnue : {command}")),
         };
-        // Toute autre demande clôt une capture du raccourci (Échap, fenêtre fermée…).
+        // Toute autre demande clôt une capture du raccourci (Échap, fenêtre quittée…).
         let result = match command {
             "capture" => result,
             _ => result.and(app.resume_hotkey()),
         };
-        let mut state = app.state();
         match result {
             // La page attend la combinaison : un état la ferait sortir de la capture.
-            Ok(()) if command == "capture" => return,
-            Ok(()) => {}
+            Ok(()) if command == "capture" => {}
+            // Fenêtre fermée : personne à qui répondre.
+            Ok(()) if command == "closed" => {}
+            Ok(()) => ui::post(&app.state()),
             Err(e) => {
                 warn!("réglage refusé : {e:#}");
-                state.push_str(&format!("error={e:#}\n"));
+                ui::post(&format!("{}error={e:#}\n", app.state()));
             }
         }
-        ui::post(&state);
     });
 }
 
@@ -323,7 +324,8 @@ impl App {
     /// Changement venu d'ailleurs que la fenêtre (menu de l'icône) : la fenêtre, si elle
     /// est ouverte, suit.
     fn change_and_report(&mut self, key: &str, value: &str) {
-        if let Err(e) = self.change(key, value) {
+        // L'état envoyé à la page met fin à une capture du raccourci en cours.
+        if let Err(e) = self.change(key, value).and(self.resume_hotkey()) {
             error!("réglage {key} : {e:#}");
             beep(false);
         }

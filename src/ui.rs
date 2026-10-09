@@ -331,6 +331,9 @@ fn fit(hwnd: HWND) {
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_SIZE => fit(hwnd),
+        // Fenêtre quittée (retour au jeu) : une capture du raccourci en cours prend
+        // fin, sinon le raccourci resterait suspendu.
+        WM_ACTIVATE if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE => refresh(),
         WM_DPICHANGED => {
             // Nouvel écran ou nouvelle échelle : Windows propose la taille à adopter.
             // SAFETY: pour WM_DPICHANGED, lParam pointe sur un RECT valide.

@@ -108,6 +108,8 @@
   });
   function keyName({ key, code }) {
     if (/^[a-z]$/i.test(key)) return key.toUpperCase();
+    // AltGr (Ctrl+Alt) ou disposition non latine : `key` n'est pas une lettre.
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3);
     if (/^Digit[0-9]$/.test(code)) return code.slice(5);
     if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
     return null;

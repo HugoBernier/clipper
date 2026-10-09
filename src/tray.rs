@@ -249,8 +249,9 @@ fn show_menu(hwnd: HWND) -> Result<()> {
             std::process::Command::new("explorer").arg(&dir).spawn()?;
         }
         ID_STARTUP => {
-            set_startup(!startup)?;
+            let result = set_startup(!startup);
             ui::refresh();
+            result?;
         }
         // SAFETY: termine la boucle de messages du thread principal.
         ID_QUIT => unsafe { PostQuitMessage(0) },
