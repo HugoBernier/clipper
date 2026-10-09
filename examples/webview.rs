@@ -4,7 +4,7 @@
 //! lecture d'un clip dans un `<video>` (dossier mappé sur un nom d'hôte virtuel), un
 //! aller-retour page → Rust → page (liste, copie dans le presse-papiers), le
 //! glisser-déposer d'un clip vers Discord, et la mémoire rendue à la fermeture
-//! (processus `msedgewebview2.exe` comptés avant, pendant et après).
+//! (processus `msedgewebview2.exe` comptés avant, à la fermeture et 3 s après).
 
 use std::cell::RefCell;
 use std::ffi::OsStr;
@@ -15,7 +15,7 @@ use anyhow::{Context, Result, ensure};
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
 use webview2_com::{
     CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
-    WebMessageReceivedEventHandler, take_pwstr,
+    NavigationStartingEventHandler, WebMessageReceivedEventHandler, take_pwstr,
 };
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Com::{CoTaskMemFree, IDataObject};
@@ -31,6 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, Interface, PCWSTR, PWSTR, w};
 
 const HOST: &str = "clips.clipper";
+/// Glisser demandé par la page, lancé depuis la boucle de messages.
+const WM_DRAG: u32 = WM_APP + 1;
 
 const PAGE: &str = r#"<!doctype html><meta charset=utf-8><title>Clipper</title>
 <style>
@@ -75,7 +77,7 @@ function select(name, row) {
   current = name;
   for (const r of list.children) r.classList.toggle('on', r === row);
   player.src = 'https://clips.clipper/' + encodeURIComponent(name);
-  player.play();
+  player.play().catch(() => {});
   copy.disabled = false;
 }
 copy.onclick = () => host.postMessage('copy\n' + current);
@@ -136,9 +138,9 @@ fn register_class() -> Result<()> {
 
 /// Ouvre la fenêtre et rend la main quand elle est détruite, moteur libéré.
 fn open_window(dir: &Path) -> Result<()> {
-    // SAFETY: fenêtre créée et utilisée sur ce thread ; les interfaces WebView2 aussi.
-    unsafe {
-        let hwnd = CreateWindowExW(
+    // SAFETY: classe enregistrée par `register_class` ; fenêtre utilisée sur ce thread.
+    let hwnd = unsafe {
+        CreateWindowExW(
             Default::default(),
             w!("ClipperSpikeWebView"),
             w!("Clipper (spike WebView2)"),
@@ -152,58 +154,81 @@ fn open_window(dir: &Path) -> Result<()> {
             None,
             None,
         )
-        .context("CreateWindowExW")?;
+    }
+    .context("CreateWindowExW")?;
 
-        let opened = Instant::now();
-        let environment = create_environment()?;
-        let controller = create_controller(&environment, hwnd)?;
-        println!("moteur prêt en {} ms", opened.elapsed().as_millis());
-        let webview = controller.CoreWebView2().context("CoreWebView2")?;
-        webview
-            .cast::<ICoreWebView2_3>()
-            .context("ICoreWebView2_3 (runtime trop ancien)")?
-            .SetVirtualHostNameToFolderMapping(
-                &HSTRING::from(HOST),
-                &HSTRING::from(dir.as_os_str()),
-                COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS,
-            )
-            .context("SetVirtualHostNameToFolderMapping")?;
+    let opened = Instant::now();
+    let environment = create_environment()?;
+    let controller = create_controller(&environment, hwnd)?;
+    println!("moteur prêt en {} ms", opened.elapsed().as_millis());
+    // SAFETY: contrôleur vivant, sur le thread qui l'a créé.
+    let webview = unsafe { controller.CoreWebView2() }.context("CoreWebView2")?;
+    let mapping = webview
+        .cast::<ICoreWebView2_3>()
+        .context("ICoreWebView2_3 (runtime trop ancien)")?;
+    // SAFETY: chaînes valides pendant l'appel.
+    unsafe {
+        mapping.SetVirtualHostNameToFolderMapping(
+            &HSTRING::from(HOST),
+            &HSTRING::from(dir.as_os_str()),
+            COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS,
+        )
+    }
+    .context("SetVirtualHostNameToFolderMapping")?;
 
-        let dir = dir.to_path_buf();
-        let mut token = 0;
+    // Un fichier déposé sur la fenêtre, ou un lien, ferait naviguer la vue : la page
+    // remplaçante pourrait alors envoyer des commandes. Seule notre page est chargée.
+    let mut first = true;
+    let guard = NavigationStartingEventHandler::create(Box::new(move |_, args| {
+        if let Some(args) = args.filter(|_| !first) {
+            // SAFETY: arguments valides pendant l'événement.
+            unsafe { args.SetCancel(true) }?;
+        }
+        first = false;
+        Ok(())
+    }));
+    let dir = dir.to_path_buf();
+    let messages = WebMessageReceivedEventHandler::create(Box::new(move |sender, args| {
+        let (Some(webview), Some(args)) = (sender, args) else {
+            return Ok(());
+        };
+        let mut message = PWSTR::null();
+        // SAFETY: arguments valides pendant l'événement ; chaîne libérée par take_pwstr.
+        unsafe { args.TryGetWebMessageAsString(&mut message) }?;
+        let reply = handle(&dir, hwnd, &take_pwstr(message))
+            .unwrap_or_else(|e| format!("status\nerreur : {e:#}"));
+        if !reply.is_empty() {
+            // SAFETY: vue vivante, sur ce thread.
+            unsafe { webview.PostWebMessageAsString(&HSTRING::from(reply)) }?;
+        }
+        Ok(())
+    }));
+    let mut token = 0;
+    // SAFETY: gestionnaires COM valides, vue vivante ; ils partent avec le contrôleur.
+    unsafe {
         webview
-            .add_WebMessageReceived(
-                &WebMessageReceivedEventHandler::create(Box::new(move |sender, args| {
-                    let (Some(webview), Some(args)) = (sender, args) else {
-                        return Ok(());
-                    };
-                    let mut message = PWSTR::null();
-                    args.TryGetWebMessageAsString(&mut message)?;
-                    let reply = handle(&dir, hwnd, &take_pwstr(message))
-                        .unwrap_or_else(|e| format!("status\nerreur : {e:#}"));
-                    if !reply.is_empty() {
-                        webview.PostWebMessageAsString(&HSTRING::from(reply))?;
-                    }
-                    Ok(())
-                })),
-                &mut token,
-            )
+            .add_NavigationStarting(&guard, &mut token)
+            .context("add_NavigationStarting")?;
+        webview
+            .add_WebMessageReceived(&messages, &mut token)
             .context("add_WebMessageReceived")?;
         webview
             .NavigateToString(&HSTRING::from(PAGE))
             .context("NavigateToString")?;
+    }
 
-        CONTROLLER.with_borrow_mut(|c| *c = Some(controller));
-        fit(hwnd);
-        println!("pendant     : {}", webview_processes());
+    CONTROLLER.with_borrow_mut(|c| *c = Some(controller));
+    fit(hwnd);
 
-        let mut msg = MSG::default();
+    let mut msg = MSG::default();
+    // SAFETY: boucle de messages classique, sur le thread de la fenêtre.
+    unsafe {
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
-        // `webview` et `environment` sont relâchés ici : plus aucune référence au moteur.
     }
+    // `webview` et `environment` sont relâchés ici : plus aucune référence au moteur.
     Ok(())
 }
 
@@ -227,7 +252,7 @@ fn handle(dir: &Path, hwnd: HWND, message: &str) -> Result<String> {
             let path = clip_path(dir, name)?;
             PENDING_DRAG.with_borrow_mut(|p| *p = Some(path));
             // SAFETY: fenêtre vivante, sur ce thread.
-            unsafe { PostMessageW(Some(hwnd), WM_APP, WPARAM(0), LPARAM(0)) }
+            unsafe { PostMessageW(Some(hwnd), WM_DRAG, WPARAM(0), LPARAM(0)) }
                 .context("PostMessageW")?;
             Ok(String::new())
         }
@@ -321,16 +346,16 @@ fn create_controller(
     rx.recv()?.context("contrôleur WebView2 absent")
 }
 
-/// Cale la vue sur la zone cliente de la fenêtre.
 fn fit(hwnd: HWND) {
     CONTROLLER.with_borrow(|controller| {
-        if let Some(controller) = controller {
-            let mut rect = RECT::default();
-            // SAFETY: fenêtre et contrôleur vivants, sur ce thread.
-            unsafe {
-                let _ = GetClientRect(hwnd, &mut rect);
-                let _ = controller.SetBounds(rect);
-            }
+        let Some(controller) = controller else { return };
+        let mut rect = RECT::default();
+        // SAFETY: fenêtre et contrôleur vivants, sur ce thread.
+        let result = unsafe { GetClientRect(hwnd, &mut rect) }
+            .context("GetClientRect")
+            .and_then(|()| unsafe { controller.SetBounds(rect) }.context("SetBounds"));
+        if let Err(e) = result {
+            eprintln!("redimensionnement : {e:#}");
         }
     });
 }
@@ -351,14 +376,19 @@ fn drag(hwnd: HWND) {
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_SIZE => fit(hwnd),
-        WM_APP => drag(hwnd),
+        WM_DRAG => drag(hwnd),
         WM_CLOSE => {
+            println!("pendant     : {}", webview_processes());
             if let Some(controller) = CONTROLLER.with_borrow_mut(Option::take) {
                 // SAFETY: contrôleur vivant ; Close libère la vue avant la fenêtre.
-                let _ = unsafe { controller.Close() };
+                if let Err(e) = unsafe { controller.Close() } {
+                    eprintln!("Close : {e:#}");
+                }
             }
             // SAFETY: notre fenêtre, sur ce thread.
-            let _ = unsafe { DestroyWindow(hwnd) };
+            if let Err(e) = unsafe { DestroyWindow(hwnd) } {
+                eprintln!("DestroyWindow : {e:#}");
+            }
         }
         // SAFETY: termine la boucle de messages de `open_window`.
         WM_DESTROY => unsafe { PostQuitMessage(0) },
