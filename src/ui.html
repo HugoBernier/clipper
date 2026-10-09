@@ -2,207 +2,10 @@
 <html lang="fr">
 <meta charset="utf-8">
 <title>Clipper</title>
-<!-- Styles : copie de docs/design-system (tokens.css puis components/bundle.css), à
-     garder identique ; la page est chargée par NavigateToString, sans fichier à côté. -->
+<!-- ui.rs remplace le repère ci-dessous par docs/design-system (tokens.css puis
+     components/bundle.css) : la page est chargée par NavigateToString, sans fichier à côté. -->
 <style>
-:root {
-    --surface-0: #16161a;
-    --surface-1: #1f1f24;
-    --surface-2: #2a2a31;
-    --line: #34343c;
-    --line-strong: #6e6e79;
-    --ink: #f4f4f5;
-    --ink-muted: #a1a1aa;
-    --rec: #e53935;
-    --rec-fill: #c62828;
-    --rec-fill-hover: #b71c1c;
-    --on-rec: #ffffff;
-    --rec-text: #ff6b63;
-    --ok-text: #4ade80;
-    --focus: #f4f4f5;
-    --tile: #2a2a31;
-    --tile-deep: #16161a;
-    --tile-ink: #f4f4f5;
-    --scrim: rgba(22, 22, 26, 0.72);
-    --space-1: 4px;
-    --space-2: 8px;
-    --space-3: 12px;
-    --space-4: 16px;
-    --space-6: 24px;
-    --space-8: 32px;
-    --radius-sm: 4px;
-    --radius-md: 6px;
-    --radius-lg: 8px;
-    --radius-full: 9999px;
-    --control-h: 32px;
-    --thumb-w: 96px;
-    --window-w: 960px;
-    --list-w: 340px;
-    --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
-    --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-    --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
-  }
-  .title { font-family: var(--font-display); font-size: 20px; line-height: 28px; font-weight: 600; }
-  .heading { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 600; }
-  .body { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 400; }
-  .button { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 600; }
-  .caption { font-family: var(--font-ui); font-size: 12px; line-height: 16px; font-weight: 400; }
-  .mono { font-family: var(--font-mono); font-size: 13px; line-height: 18px; font-weight: 400; }
-  .chip { font-family: var(--font-mono); font-size: 11px; line-height: 14px; font-weight: 600; }
-
-  html, body { margin: 0; background: var(--surface-0); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 20px; color-scheme: dark; }
-  *, *::before, *::after { box-sizing: border-box; }
-  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-  [hidden] { display: none !important; }
-  .cl-row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; padding: var(--space-4); }
-  .cl-stack { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
-  .cl-icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-
-  /* Button */
-  .cl-btn { display: inline-flex; align-items: center; gap: var(--space-2); height: var(--control-h); padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md); font: 600 14px/20px var(--font-ui); cursor: pointer; white-space: nowrap; }
-  .cl-btn--primary { background: var(--rec-fill); color: var(--on-rec); }
-  .cl-btn--primary:hover { background: var(--rec-fill-hover); }
-  .cl-btn--secondary { background: var(--surface-2); color: var(--ink); border-color: var(--line); }
-  .cl-btn--secondary:hover { border-color: var(--line-strong); }
-  .cl-btn--ghost { background: transparent; color: var(--ink); }
-  .cl-btn--ghost:hover { background: var(--surface-2); }
-  .cl-btn--icon { width: var(--control-h); padding: 0; justify-content: center; }
-  .cl-btn:disabled { opacity: .45; cursor: default; pointer-events: none; }
-
-  /* Kbd */
-  .cl-kbd { display: inline-flex; gap: 2px; align-items: center; }
-  .cl-kbd kbd { font: 400 13px/18px var(--font-mono); padding: 1px var(--space-1); min-width: 22px; text-align: center; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
-  .cl-kbd span { color: var(--ink-muted); font-size: 12px; }
-
-  /* Record status */
-  .cl-status { display: inline-flex; align-items: center; gap: var(--space-2); }
-  .cl-dot { width: 10px; height: 10px; border-radius: var(--radius-full); background: var(--rec); flex: none; }
-  .cl-status--off .cl-dot { background: transparent; border: 2px solid var(--line-strong); }
-  .cl-status__text { display: flex; flex-direction: column; }
-  .cl-status__title { font-weight: 600; }
-  .cl-status__sub { font-size: 12px; line-height: 16px; color: var(--ink-muted); display: inline-flex; align-items: center; gap: var(--space-1); }
-
-  /* Tabs */
-  .cl-tabs { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--line); }
-  .cl-tab { appearance: none; background: none; border: 0; padding: var(--space-2) var(--space-3); font: 600 14px/20px var(--font-ui); color: var(--ink-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; gap: var(--space-2); align-items: center; }
-  .cl-tab:hover { color: var(--ink); }
-  .cl-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--rec); }
-  .cl-count { font: 400 12px/16px var(--font-ui); color: var(--ink-muted); background: var(--surface-2); border-radius: var(--radius-full); padding: 0 6px; }
-
-  /* Library: list + player side by side */
-  .cl-library { display: flex; gap: var(--space-4); min-height: 0; flex: 1; }
-  .cl-clips { width: var(--list-w); flex: none; display: flex; flex-direction: column; background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: auto; }
-  .cl-clip { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); cursor: pointer; user-select: none; }
-  .cl-clip:first-child { border-top: 0; }
-  .cl-clip:hover { background: var(--surface-2); }
-  .cl-clip[aria-selected="true"] { background: var(--surface-2); }
-  .cl-clip:focus-visible { outline-offset: -2px; }
-  .cl-thumb { position: relative; width: var(--thumb-w); aspect-ratio: 16 / 9; flex: none; border-radius: var(--radius-md); background: var(--tile); overflow: hidden; }
-  .cl-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .cl-thumb__chip { position: absolute; right: var(--space-1); bottom: var(--space-1); font: 600 11px/14px var(--font-mono); background: var(--tile-deep); color: var(--tile-ink); padding: 1px var(--space-1); border-radius: var(--radius-sm); }
-  .cl-clip__body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-  .cl-clip__title { font-weight: 600; }
-  .cl-clip__file { font: 400 13px/18px var(--font-mono); color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cl-clip__meta { font-size: 12px; line-height: 16px; color: var(--ink-muted); }
-  .cl-clip--new .cl-clip__title::after { content: "Nouveau"; margin-left: var(--space-2); font: 600 12px/16px var(--font-ui); color: var(--ok-text); }
-
-  .cl-viewer { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
-  .cl-video { position: relative; aspect-ratio: 16 / 9; width: 100%; background: var(--tile); border-radius: var(--radius-md); overflow: hidden; color: var(--tile-ink); display: grid; place-items: center; }
-  .cl-video video { width: 100%; height: 100%; display: block; background: var(--tile); }
-  .cl-video__play { width: 56px; height: 56px; border-radius: var(--radius-full); background: var(--scrim); display: grid; place-items: center; }
-  .cl-video { cursor: grab; }
-  .cl-video__controls { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: var(--scrim); cursor: default; }
-  .cl-vbtn { appearance: none; border: 0; background: transparent; color: var(--tile-ink); width: 28px; height: 28px; border-radius: var(--radius-sm); display: grid; place-items: center; cursor: pointer; }
-  .cl-vbtn:hover { background: var(--tile); }
-  .cl-video__seek { flex: 1; min-width: 0; margin: 0; accent-color: var(--rec-fill); }
-  .cl-video__time { font: 400 12px/16px var(--font-mono); color: var(--tile-ink); }
-  .cl-viewer__info { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
-  .cl-viewer__title { display: flex; flex-direction: column; min-width: 0; }
-  .cl-viewer__actions { display: flex; align-items: center; gap: var(--space-1); }
-  .cl-toast { display: inline-flex; align-items: center; gap: var(--space-1); font-size: 12px; line-height: 16px; color: var(--ink); margin-right: var(--space-2); }
-  .cl-toast > .cl-icon { color: var(--ok-text); }
-
-  /* Switch */
-  .cl-switch { position: relative; display: inline-flex; width: 40px; height: 20px; flex: none; }
-  .cl-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
-  .cl-switch__track { width: 100%; height: 100%; border-radius: var(--radius-full); border: 1px solid var(--line-strong); position: relative; }
-  .cl-switch__track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: var(--radius-full); background: var(--ink-muted); }
-  .cl-switch input:checked + .cl-switch__track { background: var(--rec-fill); border-color: var(--rec-fill); }
-  .cl-switch input:checked + .cl-switch__track::after { left: 23px; background: var(--on-rec); }
-  .cl-switch input:focus-visible + .cl-switch__track { outline: 2px solid var(--focus); outline-offset: 2px; }
-
-  /* Segmented */
-  .cl-seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--surface-2); border-radius: var(--radius-md); border: 1px solid var(--line); flex-wrap: wrap; }
-  .cl-seg button { appearance: none; border: 0; background: transparent; color: var(--ink-muted); font: 600 13px/18px var(--font-ui); padding: 5px var(--space-3); border-radius: var(--radius-sm); cursor: pointer; }
-  .cl-seg button:hover { color: var(--ink); }
-  .cl-seg button[aria-checked="true"] { background: var(--surface-1); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
-
-  /* Dropdown (custom list, not the system one) */
-  .cl-dropdown { position: relative; display: inline-flex; }
-  .cl-dropdown__button { display: inline-flex; align-items: center; gap: var(--space-2); width: 280px; height: var(--control-h); padding: 0 var(--space-2) 0 var(--space-3); background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font: 400 14px/20px var(--font-ui); text-align: left; cursor: pointer; }
-  .cl-dropdown__button:hover { border-color: var(--ink-muted); }
-  .cl-dropdown__button[aria-expanded="true"] { border-color: var(--ink-muted); }
-  .cl-dropdown__value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cl-dropdown__button .cl-icon { color: var(--ink-muted); }
-  .cl-dropdown__button[aria-expanded="true"] .cl-icon { transform: rotate(180deg); }
-  .cl-dropdown__menu { position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 20; min-width: 100%; max-width: 360px; max-height: 240px; overflow: auto; padding: var(--space-1); background: var(--surface-1); border: 1px solid var(--line-strong); border-radius: var(--radius-md); }
-  .cl-dropdown__option { display: flex; align-items: center; gap: var(--space-2); height: var(--control-h); padding: 0 var(--space-2); border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; }
-  .cl-dropdown__option span { overflow: hidden; text-overflow: ellipsis; }
-  .cl-dropdown__option .cl-icon { visibility: hidden; color: var(--ink); }
-  .cl-dropdown__option[aria-selected="true"] { font-weight: 600; }
-  .cl-dropdown__option[aria-selected="true"] .cl-icon { visibility: visible; }
-  .cl-dropdown__option:hover, .cl-dropdown__option.is-active { background: var(--surface-2); }
-  .cl-dropdown__option.is-missing { color: var(--ink-muted); }
-
-  /* Number and text fields */
-  .cl-number, .cl-field { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); }
-  .cl-input { width: 64px; height: var(--control-h); padding: 0 var(--space-2); background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font: 400 13px/18px var(--font-mono); text-align: right; }
-  .cl-input--text { width: 100%; text-align: left; }
-  .cl-field { width: 100%; }
-
-  /* Slider */
-  .cl-slider { display: inline-flex; align-items: center; gap: var(--space-3); }
-  .cl-slider input[type="range"] { width: 160px; margin: 0; accent-color: var(--rec-fill); }
-  .cl-slider output { font: 400 13px/18px var(--font-mono); color: var(--ink-muted); min-width: 44px; text-align: right; }
-
-  /* Setting rows */
-  .cl-settings { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-lg); }
-  .cl-setting { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); flex-wrap: wrap; min-height: 56px; }
-  .cl-setting:first-child { border-top: 0; }
-  .cl-setting__label { display: flex; flex-direction: column; min-width: 0; }
-  .cl-setting__error { font-size: 12px; line-height: 16px; color: var(--rec-text); }
-  .cl-setting__value { display: flex; align-items: center; gap: var(--space-2); }
-  .cl-path { font: 400 13px/18px var(--font-mono); color: var(--ink-muted); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cl-estimate { display: flex; flex-direction: column; align-items: flex-end; }
-  .cl-estimate__mb { font-weight: 600; }
-  .cl-estimate__detail { font: 400 12px/16px var(--font-mono); color: var(--ink-muted); }
-  .cl-capture { color: var(--ink-muted); font-size: 12px; }
-
-  /* Empty state */
-  .cl-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); text-align: center; padding: var(--space-8) var(--space-4); background: var(--surface-1); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); }
-  .cl-empty__title { font-weight: 600; }
-  .cl-empty__text { color: var(--ink-muted); display: inline-flex; gap: var(--space-1); align-items: center; }
-
-  /* Dialog */
-  .cl-window, .cl-dialog-host { position: relative; }
-  .cl-dialogs-demo { display: flex; gap: var(--space-4); padding: var(--space-4); flex-wrap: wrap; }
-  .cl-dialog-host--demo { flex: 1 1 300px; min-height: 180px; }
-  .cl-scrim { position: absolute; inset: 0; background: var(--scrim); display: grid; place-items: center; z-index: 10; }
-  .cl-dialog { width: min(360px, calc(100% - 32px)); background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); margin: 0; }
-  .cl-dialog__title { font-weight: 600; }
-  .cl-dialog__actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
-
-  /* Window */
-  .cl-window { width: var(--window-w); max-width: 100%; background: var(--surface-0); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column; }
-  .cl-titlebar { display: flex; align-items: center; height: 32px; padding-left: var(--space-3); gap: var(--space-2); font-size: 12px; color: var(--ink-muted); user-select: none; }
-  .cl-titlebar img { width: 16px; height: 16px; }
-  .cl-titlebar__title { flex: 1; }
-  .cl-titlebar__btn { width: 46px; height: 32px; display: grid; place-items: center; color: var(--ink); }
-  .cl-titlebar__btn:hover { background: var(--surface-2); }
-  .cl-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) var(--space-6) var(--space-4); flex-wrap: wrap; }
-  .cl-nav { padding: 0 var(--space-6); }
-  .cl-body { padding: var(--space-4) var(--space-6) var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); min-height: 420px; overflow: auto; }
-  .cl-body--clips { height: 480px; }
+/* design-system */
 
 /* Mise en page de la fenêtre (propre à ui.html). */
 html, body { height: 100%; }
@@ -218,8 +21,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 .cl-video:fullscreen video { height: 100%; }
 .cl-video__play { position: absolute; pointer-events: none; }
 .cl-viewer__info { flex: none; }
-.cl-toast.is-error { color: var(--rec-text); }
-.cl-toast.is-error > .cl-icon { display: none; }
+.cl-header__end { display: flex; align-items: center; gap: var(--space-2); }
 .cl-library > .cl-empty { flex: 1; justify-content: center; }
 .cl-setting.is-off .cl-setting__value { opacity: .45; pointer-events: none; }
 #form { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -242,7 +44,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 
 <header class="cl-header">
   <div class="cl-status"><span class="cl-dot" aria-hidden="true"></span><span class="cl-status__text"><span class="cl-status__title">Enregistrement</span><span class="cl-status__sub" id="status-sub"></span></span></div>
-  <button class="cl-btn cl-btn--secondary" id="open-folder"><svg class="cl-icon"><use href="#i-folder"/></svg>Ouvrir le dossier</button>
+  <span class="cl-header__end">
+    <span class="cl-toast is-error" id="alert" role="alert" hidden></span>
+    <button class="cl-btn cl-btn--secondary" id="open-folder"><svg class="cl-icon"><use href="#i-folder"/></svg>Ouvrir le dossier</button>
+  </span>
 </header>
 <nav class="cl-nav"><div class="cl-tabs" role="tablist">
   <button class="cl-tab" role="tab" id="tab-clips" aria-selected="true"><svg class="cl-icon"><use href="#i-film"/></svg>Clips <span class="cl-count" id="count">0</span></button>
@@ -367,7 +172,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     if (kind === 'error') {
       if (renaming) reselect = renaming;
       renaming = null;
-      return toast(lines.join(' '), true);
+      return alert(lines.join(' '));
     }
     if (kind === 'state') showState(lines);
   });
@@ -381,12 +186,13 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     const mics = [['', 'Par défaut']];
     const parts = (state.microphones ?? '').split('\t');
     for (let i = 0; i + 1 < parts.length; i += 2) mics.push([parts[i], parts[i + 1]]);
-    if (!mics.some(([id]) => id === state.microphone_device)) {
-      // Liste indisponible : on ne sait pas s'il est branché.
-      const unknown = state.microphones === undefined;
-      mics.push([state.microphone_device, unknown ? 'Micro choisi' : 'Micro choisi (débranché)', !unknown]);
-    }
-    showMics(mics, state.microphone_device);
+    // Un micro choisi mais débranché n'est pas listé : Clipper enregistre alors le micro
+    // par défaut, qui s'affiche choisi.
+    const chosen = mics.some(([id]) => id === state.microphone_device) ? state.microphone_device : '';
+    showMics(mics, chosen);
+    const off = state.microphone !== 'true';
+    micButton.disabled = off;
+    form.elements.microphone_volume.disabled = off;
     for (const el of form.elements) {
       if (!(el.name in state)) continue;
       if (el.type === 'checkbox') el.checked = state[el.name] === 'true';
@@ -424,8 +230,8 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   const micButton = mic.querySelector('.cl-dropdown__button');
   const micMenu = mic.querySelector('.cl-dropdown__menu');
   function showMics(mics, chosen) {
-    micMenu.replaceChildren(...mics.map(([id, name, missing]) => {
-      const option = Object.assign(document.createElement('div'), { className: 'cl-dropdown__option' + (missing ? ' is-missing' : '') });
+    micMenu.replaceChildren(...mics.map(([id, name]) => {
+      const option = Object.assign(document.createElement('div'), { className: 'cl-dropdown__option' });
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', String(id === chosen));
       option.dataset.value = id;
@@ -435,11 +241,12 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     }));
     mic.querySelector('.cl-dropdown__value').textContent = mics.find(([id]) => id === chosen)?.[1] ?? '';
   }
-  function micOpen(open) {
+  // `refocus` : rendre le focus au bouton (clavier, choix), pas après un clic ailleurs.
+  function micOpen(open, refocus = true) {
     micButton.setAttribute('aria-expanded', String(open));
     micMenu.hidden = !open;
     for (const o of micMenu.children) o.classList.toggle('is-active', open && o.getAttribute('aria-selected') === 'true');
-    if (!open) micButton.focus();
+    if (!open && refocus) micButton.focus();
   }
   function micPick(option) {
     micOpen(false);
@@ -452,7 +259,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     const option = e.target.closest('.cl-dropdown__option');
     if (option) micPick(option);
   });
-  document.addEventListener('click', e => { if (!micMenu.hidden && !mic.contains(e.target)) micOpen(false); });
+  document.addEventListener('click', e => { if (!micMenu.hidden && !mic.contains(e.target)) micOpen(false, false); });
   mic.addEventListener('keydown', e => {
     const options = [...micMenu.children];
     const active = options.findIndex(o => o.classList.contains('is-active'));
@@ -461,7 +268,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       return;
     }
     if (e.key === 'Escape') { e.preventDefault(); micOpen(false); }
-    else if (e.key === 'Tab') micOpen(false);
+    else if (e.key === 'Tab') micOpen(false, false);
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const next = Math.max(0, Math.min(options.length - 1, active + (e.key === 'ArrowDown' ? 1 : -1)));
@@ -554,12 +361,21 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   let reselect = null;
   let toastTimer;
 
-  function toast(text, error = false) {
+  let alertTimer;
+
+  function toast(text) {
     $('toast-text').textContent = text;
-    $('toast').classList.toggle('is-error', error);
     $('toast').hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => $('toast').hidden = true, error ? 6000 : 2400);
+    toastTimer = setTimeout(() => $('toast').hidden = true, 2400);
+  }
+
+  // Erreur d'une action : dans l'en-tête, visible quel que soit l'onglet.
+  function alert(text) {
+    $('alert').textContent = text;
+    $('alert').hidden = false;
+    clearTimeout(alertTimer);
+    alertTimer = setTimeout(() => $('alert').hidden = true, 6000);
   }
 
   function title(ms) {
@@ -577,6 +393,9 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     const list = $('list');
     const scroll = list.scrollTop;
     list.textContent = '';
+    // Les anciennes lignes ne sont plus observées ni en attente de vignette.
+    seen.disconnect();
+    queue = [];
     let found = false;
     for (const line of lines) {
       const [name, modified, size, duration, height, fps] = line.split('\t');
@@ -587,6 +406,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       row.dataset.name = name;
       row.dataset.modified = modified;
       row.dataset.title = title(modified);
+      if (duration) row.dataset.readable = '1';
       const body = Object.assign(document.createElement('span'), { className: 'cl-clip__body' });
       body.append(
         Object.assign(document.createElement('span'), { className: 'cl-clip__title', textContent: row.dataset.title }),
@@ -600,6 +420,9 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       list.append(row);
       found ||= name === current;
     }
+    // Vignettes des clips disparus (supprimés, renommés) : libérées.
+    const keys = new Set([...list.children].map(thumbKey));
+    for (const key of thumbs.keys()) if (!keys.has(key)) thumbs.delete(key);
     $('count').textContent = lines.length;
     $('library').hidden = !lines.length;
     $('empty').hidden = !!lines.length;
@@ -614,10 +437,14 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   }
 
   // Vignettes : un lecteur caché prend l'image à 1 s de chaque clip visible, un clip à
-  // la fois, et la garde pour les listes suivantes (clé : nom et date).
+  // la fois, et la garde pour les listes suivantes (clé : nom et date). Un clip dont Rust
+  // n'a pas lu la durée (OneDrive « en ligne uniquement », fichier illisible) n'en a pas :
+  // le lire le téléchargerait.
   const thumbs = new Map();
+  const failed = new Set();
   let queue = [];
   let grabbing = null;
+  let grabTimer;
   const grabber = Object.assign(document.createElement('video'), { muted: true, preload: 'auto' });
   const thumbKey = row => `${row.dataset.name}\t${row.dataset.modified}`;
   const seen = new IntersectionObserver(entries => {
@@ -633,19 +460,27 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     const box = Object.assign(document.createElement('span'), { className: 'cl-thumb' });
     const canvas = thumbs.get(thumbKey(row)) ?? Object.assign(document.createElement('canvas'), { width: 192, height: 108 });
     box.append(canvas, Object.assign(document.createElement('span'), { className: 'cl-thumb__chip', textContent: duration }));
-    if (!thumbs.has(thumbKey(row))) seen.observe(row);
+    if (!thumbs.has(thumbKey(row)) && row.dataset.readable) seen.observe(row);
     return box;
   }
 
   function grabNext() {
     while (!grabbing && queue.length) {
       const row = queue.shift();
-      if (!row.isConnected || thumbs.has(thumbKey(row))) continue;
+      if (!row.isConnected || thumbs.has(thumbKey(row)) || failed.has(thumbKey(row))) continue;
       grabbing = row;
       grabber.src = clipUrl(row.dataset.name, row.dataset.modified);
+      // Un chargement qui ne finit pas ne bloque pas les vignettes suivantes.
+      grabTimer = setTimeout(grabFailed, 8000);
     }
   }
+  function grabFailed() {
+    if (!grabbing) return;
+    failed.add(thumbKey(grabbing));
+    grabDone();
+  }
   function grabDone() {
+    clearTimeout(grabTimer);
     grabbing = null;
     grabber.removeAttribute('src');
     grabber.load();
@@ -663,7 +498,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     thumbs.set(thumbKey(row), canvas);
     grabDone();
   });
-  grabber.addEventListener('error', grabDone);
+  grabber.addEventListener('error', grabFailed);
   // Lâche un clip avant de le renommer ou de le supprimer.
   function release(name) {
     queue = queue.filter(row => row.dataset.name !== name);
@@ -812,7 +647,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
 
   // Un bouton cliqué à la souris rend le focus : Espace commande alors le lecteur au
   // lieu de rejouer « Copier ». Au clavier (Tab), le bouton garde Espace.
-  for (const button of document.querySelectorAll('.cl-tabs button, .cl-viewer button')) {
+  for (const button of document.querySelectorAll('.cl-header button, .cl-tabs button, .cl-viewer button')) {
     button.addEventListener('click', e => { if (e.detail > 0) button.blur(); });
   }
 

@@ -47,6 +47,13 @@ use crate::tray;
 pub const WM_UI: u32 = WM_APP + 3;
 const CLASS: PCWSTR = w!("ClipperWindow");
 const PAGE: &str = include_str!("ui.html");
+/// Styles du design system, insérés dans la page à la place de `STYLES_SLOT` : une seule
+/// source, `docs/design-system`.
+const STYLES: &str = concat!(
+    include_str!("../docs/design-system/tokens.css"),
+    include_str!("../docs/design-system/components/bundle.css"),
+);
+const STYLES_SLOT: &str = "/* design-system */";
 /// Nom d'hôte virtuel du dossier des clips (lu par `ui.html`).
 const CLIPS_HOST: &str = "clips.clipper";
 /// Taille à 100 % d'échelle (96 dpi).
@@ -69,10 +76,9 @@ thread_local! {
     /// Nos navigations (`load_page`) pas encore vues par la garde de navigation : seules
     /// elles passent.
     static OWN_NAVIGATIONS: Cell<u32> = const { Cell::new(0) };
-    /// Un clip modifié après cet instant (ms) est « Nouveau » : la dernière ouverture de
+    /// Un clip modifié après cet instant (ms) est « Nouveau » : la dernière fermeture de
     /// la fenêtre, ou le lancement de Clipper avant la première.
     static NEW_SINCE: Cell<u64> = const { Cell::new(0) };
-    static OPENED_AT: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Ouvre la fenêtre, ou la ramène au premier plan si elle l'est déjà.
@@ -86,10 +92,6 @@ pub fn open() -> Result<()> {
         return Ok(());
     }
     register_class()?;
-    if OPENED_AT.get() != 0 {
-        NEW_SINCE.set(OPENED_AT.get());
-    }
-    OPENED_AT.set(now_ms());
     // SAFETY: GetDpiForSystem n'a pas de précondition.
     let dpi = unsafe { GetDpiForSystem() } as i32;
     // SAFETY: classe enregistrée ci-dessus ; fenêtre utilisée sur ce thread.
@@ -196,10 +198,14 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+fn page() -> String {
+    PAGE.replacen(STYLES_SLOT, STYLES, 1)
+}
+
 fn load_page(webview: &ICoreWebView2) -> Result<()> {
     OWN_NAVIGATIONS.set(OWN_NAVIGATIONS.get() + 1);
     // SAFETY: vue vivante, sur ce thread ; chaîne valide pendant l'appel.
-    unsafe { webview.NavigateToString(&HSTRING::from(PAGE)) }
+    unsafe { webview.NavigateToString(&HSTRING::from(page())) }
         .context("NavigateToString")
         .inspect_err(|_| OWN_NAVIGATIONS.set(OWN_NAVIGATIONS.get().saturating_sub(1)))
 }
@@ -551,6 +557,8 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         // Pas de PostQuitMessage : Clipper continue dans la zone de notification.
         WM_DESTROY => {
             WINDOW.with_borrow_mut(|w| *w = None);
+            // Les clips vus jusqu'ici ne sont plus « Nouveau » à la prochaine ouverture.
+            NEW_SINCE.set(now_ms());
             // Une capture du raccourci en cours prend fin.
             request("closed");
             info!("fenêtre fermée");
@@ -559,4 +567,17 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         _ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
     LRESULT(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_embeds_the_design_system() {
+        let page = page();
+        assert!(!page.contains(STYLES_SLOT));
+        assert!(page.contains("--surface-0"));
+        assert!(page.contains(".cl-dropdown__menu"));
+    }
 }
