@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/HugoBernier/clipper/compare/v0.3.0...v0.4.0) (2026-10-09)
+
+
+### Features
+
+* revoir et partager ses clips depuis la fenêtre ([#8](https://github.com/HugoBernier/clipper/issues/8)) ([faa492c](https://github.com/HugoBernier/clipper/commit/faa492c87f51c3addbb63a9e206605455866d85b))
+
 ## [0.3.0](https://github.com/HugoBernier/clipper/compare/v0.2.0...v0.3.0) (2026-10-09)
 
 
