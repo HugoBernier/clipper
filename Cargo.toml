@@ -16,5 +16,9 @@ windows = { version = "0.62.2", features = ["Foundation", "Graphics_Capture", "G
 lto = true
 panic = "abort"
 
+[dev-dependencies]
+# Spike C (examples/webview.rs) ; passe en dépendance normale à l'itération 9.
+webview2-com = "0.39.1"
+
 [build-dependencies]
 embed-resource = "3.0.12"
