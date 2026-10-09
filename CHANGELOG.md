@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/HugoBernier/clipper/compare/v0.5.1...v0.6.0) (2026-10-09)
+
+
+### Features
+
+* **ui:** appliquer le design system à la fenêtre ([#17](https://github.com/HugoBernier/clipper/issues/17)) ([bb682a9](https://github.com/HugoBernier/clipper/commit/bb682a9ebd4ac54d7a703110411ad7ee21c54612))
+
 ## [0.5.1](https://github.com/HugoBernier/clipper/compare/v0.5.0...v0.5.1) (2026-10-09)
 
 
