@@ -26,7 +26,7 @@ Clipper is a background replay buffer for Windows: one hotkey keeps the last sec
 
 ## Visual foundations
 
-**Colour.** Neutrals come from the app icon's tile: dark `surface-0` (#16161a) and `surface-2` (#2a2a31) are its two gradient stops; `ink` is the replay arrow's white; `rec` is the record dot.
+**Colour.** Neutrals come from the app icon: `surface-2` (#2a2a31) is its tile, `surface-0` (#16161a) its outer ring; `ink` is the replay arrow's white; `rec` is the record dot.
 - Lay the window on `surface-0`, group content in `surface-1` panels, use `surface-2` for hover, inputs, keys and secondary buttons.
 - Body text in `ink`, secondary text in `ink-muted`; both pass 4.5:1 on every surface.
 - `rec` is a shape colour only (dot, tab underline). For a filled button use `rec-fill` with `on-rec`; for red text use `rec-text`.
@@ -47,11 +47,13 @@ Clipper is a background replay buffer for Windows: one hotkey keeps the last sec
 
 **Borders, shadows, motion.** Edges are 1px `line` hairlines; controls that need an edge to be found use `line-strong` (3:1). No drop shadows inside the window (Windows draws the window's own). Motion stays under 150 ms: hover fills, the toast fading out. No looping animation, including the record dot.
 
+**Scrollbars.** Thin, `line-strong` thumb on a transparent track, shown only when content overflows (a small window, a long clip list). Never the system's light scrollbar.
+
 **States.** Hover: `surface-2` fill or a `line-strong` edge. Focus: a solid 2px `focus` ring, 2px offset, on every interactive element. Disabled: 45 % opacity, no hover.
 
 ## Iconography
 
-- App and tray icon: `assets/Logos/clipper.svg` (tile, replay arrow, record dot). Provisional mock-up, to be replaced by the final design under the same file name.
+- App icon: `assets/Logos/clipper.svg` from 32px up (tile, outer ring, replay arrow, record dot), `clipper-small.svg` for 16–24px (tray). See `assets/Logos/README.md`.
 - UI glyphs: Clipper's own line set, inline SVG on a 16 × 16 grid, 1.5px stroke, round caps and joins, `currentColor`, no fill except the play triangle's outline. Current set: folder, play, pause, volume, full screen, copy, pencil, trash, check, film, sliders, chevron, minimise, close. A new glyph follows the same grid and stroke; no icon font, no emoji.
 - An icon never stands alone without `aria-label` and a `title` tooltip.
 
