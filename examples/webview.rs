@@ -23,6 +23,10 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Ole::{
     DROPEFFECT_COPY, IDropSource, OleFlushClipboard, OleInitialize, OleSetClipboard,
 };
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LBUTTON};
 use windows::Win32::UI::Shell::{
     BHID_DataObject, FOLDERID_Videos, IShellItem, KF_FLAG_DEFAULT, SHCreateItemFromParsingName,
     SHDoDragDrop, SHGetKnownFolderPath,
@@ -61,14 +65,20 @@ function render(names) {
     row.onclick = () => select(name, row);
     // Glisser : le drag HTML ne transporte pas de fichier, Rust lance un glisser natif.
     row.onpointerdown = down => {
+      if (down.button !== 0) return;
       const move = e => {
         if (Math.abs(e.clientX - down.clientX) + Math.abs(e.clientY - down.clientY) < 6) return;
         stop();
         host.postMessage('drag\n' + name);
       };
-      const stop = () => { removeEventListener('pointermove', move); removeEventListener('pointerup', stop); };
+      const stop = () => {
+        removeEventListener('pointermove', move);
+        removeEventListener('pointerup', stop);
+        removeEventListener('pointercancel', stop);
+      };
       addEventListener('pointermove', move);
       addEventListener('pointerup', stop);
+      addEventListener('pointercancel', stop);
     };
     list.append(row);
   }
@@ -94,7 +104,13 @@ fn main() -> Result<()> {
         Some(dir) => PathBuf::from(dir),
         None => videos_dir()?.join("Clipper"),
     };
+    // Le mappage d'hôte virtuel et le Shell veulent un chemin absolu.
+    let dir = std::fs::canonicalize(&dir).with_context(|| format!("{}", dir.display()))?;
     println!("clips : {}", dir.display());
+    // Mêmes conditions que Clipper (main.rs) : coordonnées du glisser non virtualisées.
+    // SAFETY: réglage du processus, avant toute création de fenêtre.
+    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
+        .context("SetProcessDpiAwarenessContext")?;
     // SAFETY: init OLE (STA, exigé par WebView2, le presse-papiers et le glisser) une fois.
     unsafe { OleInitialize(None).context("OleInitialize")? };
     register_class()?;
@@ -276,10 +292,13 @@ fn list_clips(dir: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Un nom venu de la page ne doit désigner qu'un fichier du dossier.
+/// Un nom venu de la page ne doit désigner qu'un clip du dossier (pas de `..`, de
+/// séparateur, ni de flux NTFS `clip.mp4:x`).
 fn clip_path(dir: &Path, name: &str) -> Result<PathBuf> {
     ensure!(
-        !name.is_empty() && Path::new(name).file_name() == Some(OsStr::new(name)),
+        Path::new(name).file_name() == Some(OsStr::new(name))
+            && !name.contains(':')
+            && Path::new(name).extension() == Some(OsStr::new("mp4")),
         "nom de clip invalide : {name}"
     );
     let path = dir.join(name);
@@ -299,7 +318,8 @@ fn data_object(path: &Path) -> Result<IDataObject> {
 }
 
 fn create_environment() -> Result<ICoreWebView2Environment> {
-    let data = std::env::var("LOCALAPPDATA").context("LOCALAPPDATA")? + r"\clipper\webview2";
+    // Profil distinct de celui de Clipper : ne pas rejoindre son moteur (mesures faussées).
+    let data = std::env::var("LOCALAPPDATA").context("LOCALAPPDATA")? + r"\clipper\webview2-spike";
     let (tx, rx) = std::sync::mpsc::channel();
     CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
         Box::new(move |handler| {
@@ -316,7 +336,7 @@ fn create_environment() -> Result<ICoreWebView2Environment> {
         }),
         Box::new(move |result, environment| {
             result?;
-            tx.send(environment).expect("canal ouvert");
+            let _ = tx.send(environment);
             Ok(())
         }),
     )
@@ -338,7 +358,7 @@ fn create_controller(
         }),
         Box::new(move |result, controller| {
             result?;
-            tx.send(controller).expect("canal ouvert");
+            let _ = tx.send(controller);
             Ok(())
         }),
     )
@@ -360,10 +380,41 @@ fn fit(hwnd: HWND) {
     });
 }
 
+fn notify_moved() {
+    CONTROLLER.with_borrow(|controller| {
+        if let Some(controller) = controller {
+            // SAFETY: contrôleur vivant, sur ce thread.
+            if let Err(e) = unsafe { controller.NotifyParentWindowPositionChanged() } {
+                eprintln!("NotifyParentWindowPositionChanged : {e:#}");
+            }
+        }
+    });
+}
+
+fn focus() {
+    CONTROLLER.with_borrow(|controller| {
+        if let Some(controller) = controller {
+            // SAFETY: contrôleur vivant, sur ce thread.
+            if let Err(e) =
+                unsafe { controller.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) }
+            {
+                eprintln!("MoveFocus : {e:#}");
+            }
+        }
+    });
+}
+
 fn drag(hwnd: HWND) {
     let Some(path) = PENDING_DRAG.with_borrow_mut(Option::take) else {
         return;
     };
+    // Demande asynchrone : le bouton a pu être relâché entre-temps (le shell déposerait
+    // aussitôt sous le curseur).
+    // SAFETY: GetKeyState n'a pas de précondition.
+    if unsafe { GetKeyState(i32::from(VK_LBUTTON.0)) } >= 0 {
+        println!("glisser annulé : bouton déjà relâché");
+        return;
+    }
     let result = data_object(&path).and_then(|data| {
         // SAFETY: boucle modale du shell, lancée hors de tout gestionnaire WebView2 ;
         // sans IDropSource, le shell fournit le sien (curseurs, Échap pour annuler).
@@ -376,6 +427,10 @@ fn drag(hwnd: HWND) {
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_SIZE => fit(hwnd),
+        // Sans ça, les listes déroulantes s'ouvrent à l'ancienne position de la fenêtre,
+        // et le clavier n'atteint pas la page avant un clic.
+        WM_MOVE => notify_moved(),
+        WM_SETFOCUS => focus(),
         WM_DRAG => drag(hwnd),
         WM_CLOSE => {
             println!("pendant     : {}", webview_processes());
