@@ -33,6 +33,8 @@ pub struct Config {
     pub microphone: bool,
     /// Volume du micro dans le clip, en % (0 à 200).
     pub microphone_volume: u32,
+    /// Identifiant Windows du micro ; vide : le micro de communication par défaut.
+    pub microphone_device: String,
     /// Taille cible de la 0.1 : lue pour accepter un ancien fichier, jamais réécrite.
     #[serde(skip_serializing)]
     target_mb: Option<f64>,
@@ -88,6 +90,7 @@ impl Default for Config {
             output_dir: "Clipper".into(),
             microphone: true,
             microphone_volume: 100,
+            microphone_device: String::new(),
             target_mb: None,
         }
     }
@@ -157,6 +160,7 @@ impl Config {
                 parse_hotkey(value)?;
                 next.hotkey = value.into();
             }
+            "microphone_device" => next.microphone_device = value.into(),
             "output_dir" => {
                 ensure!(!value.is_empty(), "dossier des clips vide");
                 next.output_dir = value.into();
@@ -179,6 +183,7 @@ impl Config {
             ("output_dir", self.output_dir.display().to_string()),
             ("microphone", self.microphone.to_string()),
             ("microphone_volume", self.microphone_volume.to_string()),
+            ("microphone_device", self.microphone_device.clone()),
         ]
     }
 
@@ -506,6 +511,17 @@ microphone = true
     }
 
     #[test]
+    fn microphone_device_defaults_to_windows_choice() {
+        let mut config = Config::default();
+        assert_eq!(config.microphone_device, "");
+        let id = "{0.0.1.00000000}.{8f6e1c42-1b2a-4c3d-9e8f-0a1b2c3d4e5f}";
+        config.set("microphone_device", id).unwrap();
+        assert_eq!(config.microphone_device, id);
+        config.set("microphone_device", "").unwrap();
+        assert_eq!(config.microphone_device, "");
+    }
+
+    #[test]
     fn invalid_set_leaves_the_config_unchanged() {
         let mut config = Config::default();
         for (key, value) in [
@@ -528,6 +544,9 @@ microphone = true
         let mut config = Config::default();
         config.set("quality", "high").unwrap();
         config.set("output_dir", r"C:\Vidéos\Clips").unwrap();
+        config
+            .set("microphone_device", "{0.0.1.00000000}.{abc}")
+            .unwrap();
         let mut copy = Config::default();
         for (key, value) in config.pairs() {
             copy.set(key, &value).unwrap();
