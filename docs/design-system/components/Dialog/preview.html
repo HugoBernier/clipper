@@ -1,0 +1,23 @@
+<!-- @dsCard group="Feedback" height=200 -->
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><link rel="stylesheet" href="../../tokens.css"><link rel="stylesheet" href="../bundle.css"></head>
+<body>
+<div class="cl-dialogs-demo">
+<div class="cl-dialog-host cl-dialog-host--demo"><div class="cl-scrim" data-dialog="delete"><div class="cl-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlg-del">
+  <span class="cl-dialog__title" id="dlg-del">Supprimer ce clip ?</span>
+  <span class="cl-clip__file" data-dialog-file>clip_20261008_211403.mp4</span>
+  <div class="cl-dialog__actions"><button class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary" data-confirm>Supprimer</button></div>
+</div></div>
+<div class="cl-scrim" data-dialog="rename" hidden><form class="cl-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-ren" onsubmit="return false">
+  <label class="cl-dialog__title" id="dlg-ren" for="ren-input">Renommer</label>
+  <span class="cl-field"><input class="cl-input cl-input--text" id="ren-input" value="clip_20261008_211403"><span>.mp4</span></span>
+  <div class="cl-dialog__actions"><button type="button" class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary" data-confirm-rename>Renommer</button></div>
+</form></div></div><div class="cl-dialog-host cl-dialog-host--demo"><div class="cl-scrim" data-dialog="rename"><form class="cl-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-ren" onsubmit="return false">
+  <label class="cl-dialog__title" id="dlg-ren" for="ren-input">Renommer</label>
+  <span class="cl-field"><input class="cl-input cl-input--text" id="ren-input" value="clip_20261008_211403"><span>.mp4</span></span>
+  <div class="cl-dialog__actions"><button type="button" class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary" data-confirm-rename>Renommer</button></div>
+</form></div></div>
+</div>
+</body>
+</html>

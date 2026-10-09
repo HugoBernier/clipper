@@ -1,0 +1,45 @@
+/* Clipper — generated from tokens.json */
+:root {
+  --surface-0: #16161a;
+  --surface-1: #1f1f24;
+  --surface-2: #2a2a31;
+  --line: #34343c;
+  --line-strong: #6e6e79;
+  --ink: #f4f4f5;
+  --ink-muted: #a1a1aa;
+  --rec: #e53935;
+  --rec-fill: #c62828;
+  --rec-fill-hover: #b71c1c;
+  --on-rec: #ffffff;
+  --rec-text: #ff6b63;
+  --ok-text: #4ade80;
+  --focus: #f4f4f5;
+  --tile: #2a2a31;
+  --tile-deep: #16161a;
+  --tile-ink: #f4f4f5;
+  --scrim: rgba(22, 22, 26, 0.72);
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-full: 9999px;
+  --control-h: 32px;
+  --thumb-w: 96px;
+  --window-w: 960px;
+  --list-w: 340px;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+}
+.title { font-family: var(--font-display); font-size: 20px; line-height: 28px; font-weight: 600; }
+.heading { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 600; }
+.body { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 400; }
+.button { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 600; }
+.caption { font-family: var(--font-ui); font-size: 12px; line-height: 16px; font-weight: 400; }
+.mono { font-family: var(--font-mono); font-size: 13px; line-height: 18px; font-weight: 400; }
+.chip { font-family: var(--font-mono); font-size: 11px; line-height: 14px; font-weight: 600; }
