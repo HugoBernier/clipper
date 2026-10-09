@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/HugoBernier/clipper/compare/v0.4.0...v0.4.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* démarrer sur un PC à deux GPU et signaler un arrêt ([#10](https://github.com/HugoBernier/clipper/issues/10)) ([e04f277](https://github.com/HugoBernier/clipper/commit/e04f2778c3c02e2b9c245ab6c306f7248afe6757))
+
 ## [0.4.0](https://github.com/HugoBernier/clipper/compare/v0.3.0...v0.4.0) (2026-10-09)
 
 
