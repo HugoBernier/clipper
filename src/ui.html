@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="fr">
+<meta charset="utf-8">
+<title>Clipper</title>
+<!-- Visuel brut : le design system viendra à l'itération 11. -->
+<style>
+  body { font: 14px system-ui; margin: 16px; max-width: 560px; }
+  label { display: block; margin: 12px 0; }
+  #error { color: #c00; }
+</style>
+<h1>Réglages</h1>
+<form id="form">
+  <label>Résolution
+    <select name="height">
+      <option value="720">720p</option>
+      <option value="1080">1080p</option>
+      <option value="1440">1440p</option>
+    </select>
+  </label>
+  <label>Images par seconde
+    <select name="fps">
+      <option>30</option><option>60</option><option>120</option><option>144</option>
+    </select>
+  </label>
+  <label>Qualité
+    <select name="quality">
+      <option value="low">Basse</option>
+      <option value="medium">Moyenne</option>
+      <option value="high">Haute</option>
+      <option value="very_high">Très haute</option>
+    </select>
+  </label>
+  <label>Durée du clip
+    <input name="clip_seconds" type="number" min="10" max="300" step="1"> s
+  </label>
+  <p id="estimate"></p>
+  <label><input name="microphone" type="checkbox"> Micro</label>
+  <label>Volume du micro
+    <input name="microphone_volume" type="range" min="0" max="200" step="5">
+    <output id="volume"></output> %
+  </label>
+  <label>Raccourci
+    <input name="hotkey" readonly>
+    <button id="capture" type="button">Changer…</button>
+  </label>
+  <label>Dossier des clips
+    <span id="clips-dir"></span>
+    <button id="folder" type="button">Changer…</button>
+  </label>
+  <label><input id="startup" type="checkbox"> Démarrer avec Windows</label>
+</form>
+<p id="error" role="alert"></p>
+<script>
+  const host = window.chrome.webview;
+  const $ = id => document.getElementById(id);
+  const form = $('form');
+  const send = (command, arg) => host.postMessage(arg === undefined ? command : command + '\n' + arg);
+  let capturing = false;
+
+  // Rust répond toujours par l'état complet : « state » puis des lignes clé=valeur.
+  host.addEventListener('message', e => {
+    const [kind, ...lines] = e.data.split('\n');
+    if (kind !== 'state') return;
+    const state = Object.fromEntries(lines.map(line => {
+      const i = line.indexOf('=');
+      return [line.slice(0, i), line.slice(i + 1)];
+    }));
+    for (const el of form.elements) {
+      if (!(el.name in state)) continue;
+      if (el.type === 'checkbox') el.checked = state[el.name] === 'true';
+      else el.value = state[el.name];
+    }
+    capturing = false;
+    $('volume').value = state.microphone_volume;
+    $('clips-dir').textContent = state.clips_dir;
+    $('startup').checked = state.startup === 'true';
+    $('estimate').textContent =
+      `≈ ${state.estimate_mb} Mo par clip (${state.width}×${state.height}, ${state.bitrate_mbps} Mb/s)`;
+    $('error').textContent = state.error ?? '';
+  });
+
+  form.addEventListener('submit', e => e.preventDefault());
+  form.addEventListener('change', e => {
+    const el = e.target;
+    if (!el.name || el.name === 'hotkey') return;
+    send('set', `${el.name}=${el.type === 'checkbox' ? el.checked : el.value}`);
+  });
+  form.elements.microphone_volume.addEventListener('input', e => $('volume').value = e.target.value);
+  $('startup').addEventListener('change', e => send('startup', String(e.target.checked)));
+  $('folder').addEventListener('click', () => send('pick_folder'));
+  $('capture').addEventListener('click', () => {
+    capturing = true;
+    send('capture');
+    form.elements.hotkey.value = 'Appuyez sur la combinaison (Échap : annuler)';
+  });
+
+  // Format accepté par `parse_hotkey` : modificateurs puis F1–F24, A–Z ou 0–9.
+  // Lettres d'après `key` (AZERTY : la touche A donne VK_A), chiffres et F1–F24
+  // d'après `code` (la rangée du haut donne VK_0–VK_9 quelle que soit la disposition).
+  document.addEventListener('keydown', e => {
+    if (!capturing) return;
+    e.preventDefault();
+    if (e.code === 'Escape') return send('get');
+    const key = keyName(e);
+    if (!key) return; // modificateur seul : on attend la touche
+    const parts = [e.ctrlKey && 'Ctrl', e.altKey && 'Alt', e.shiftKey && 'Shift', e.metaKey && 'Win', key];
+    send('set', 'hotkey=' + parts.filter(Boolean).join('+'));
+  });
+  function keyName({ key, code }) {
+    if (/^[a-z]$/i.test(key)) return key.toUpperCase();
+    // AltGr (Ctrl+Alt) ou disposition non latine : `key` n'est pas une lettre.
+    if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+    if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+    if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code;
+    return null;
+  }
+
+  send('get');
+</script>
+</html>

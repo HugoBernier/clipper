@@ -69,6 +69,11 @@ impl Ring {
         }
     }
 
+    /// Nouvelle durée conservée (durée du clip changée) ; appliquée au prochain paquet.
+    pub fn set_keep(&mut self, keep: i64) {
+        self.keep = keep;
+    }
+
     /// Vide le buffer (changement de qualité : les anciennes images n'ont plus le format
     /// de l'encodeur).
     pub fn clear(&mut self) {
@@ -156,6 +161,27 @@ mod tests {
         let ring = filled(25, 50, 10);
         assert_eq!(ring.timestamps().first(), Some(&20));
         assert_eq!(ring.last_ts(), Some(49));
+    }
+
+    #[test]
+    fn shorter_keep_evicts_at_the_next_push() {
+        let mut ring = filled(100, 100, 10);
+        assert_eq!(ring.video.front().map(|p| p.ts), Some(0));
+        ring.set_keep(25);
+        ring.push_video(packet(100, true));
+        // 100 - 70 = 30 ≥ 25 ; 80 ne donnerait que 20.
+        assert_eq!(ring.video.front().map(|p| p.ts), Some(70));
+    }
+
+    #[test]
+    fn longer_keep_lets_the_buffer_grow() {
+        let mut ring = filled(25, 100, 10);
+        ring.set_keep(50);
+        for ts in 100..200 {
+            ring.push_video(packet(ts, ts % 10 == 0));
+        }
+        let span = ring.last_ts().unwrap() - ring.video.front().unwrap().ts;
+        assert!(span >= 50, "{span}");
     }
 
     #[test]
