@@ -36,11 +36,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::COPYENGINE_E_SHARING_VIOLATION_SRC;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONHAND,
-    MB_OK, MESSAGEBOX_STYLE, MSG, PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY, WNDCLASSW,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONERROR,
+    MB_ICONHAND, MB_OK, MESSAGEBOX_STYLE, MSG, MessageBoxW, PostMessageW, PostQuitMessage,
+    RegisterClassW, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY, WNDCLASSW,
 };
-use windows::core::{HRESULT, w};
+use windows::core::{HRESULT, HSTRING, w};
 
 use crate::audio::Microphone;
 use crate::config::{Config, Hotkey, parse_hotkey};
@@ -73,10 +73,26 @@ fn main() -> Result<()> {
     }));
     if let Err(e) = run() {
         error!("{e:#}");
-        beep(false);
+        report_stop(&e);
         return Err(e);
     }
     Ok(())
+}
+
+/// Clipper s'arrête : sans fenêtre ni icône, un son passerait inaperçu, on l'écrit.
+fn report_stop(e: &anyhow::Error) {
+    let text = format!(
+        "Clipper s'est arrêté :\n\n{e:#}\n\nDétails dans %LOCALAPPDATA%\\clipper\\clipper.log"
+    );
+    // SAFETY: boîte modale sans fenêtre parente, chaînes valides pendant l'appel.
+    unsafe {
+        MessageBoxW(
+            None,
+            &HSTRING::from(text),
+            windows::core::w!("Clipper"),
+            MB_OK | MB_ICONERROR,
+        )
+    };
 }
 
 /// Log dans `%LOCALAPPDATA%\clipper\clipper.log`, recréé à chaque démarrage (pas de

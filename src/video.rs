@@ -17,11 +17,13 @@ use windows::Graphics::Capture::{
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Graphics::SizeInt32;
-use windows::Win32::Foundation::{E_FAIL, E_POINTER, HMODULE, LPARAM, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+use windows::Win32::Foundation::{E_FAIL, E_POINTER, HMODULE, LPARAM, LUID, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
-use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, IDXGIAdapter, IDXGIDevice, IDXGIFactory4,
+};
 use windows::Win32::Graphics::Gdi::{MONITOR_DEFAULTTOPRIMARY, MonitorFromPoint};
 use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -119,7 +121,6 @@ fn run(
     ready: &mut Option<Sender<Result<VideoFormat>>>,
 ) -> Result<()> {
     mf::startup()?;
-    let (device, context) = create_device()?;
     let item = primary_monitor()?;
     let src = item.Size()?;
     // Hauteur fixe, largeur au ratio de l'écran (3440x1440 → 1720x720), paire pour NV12.
@@ -131,7 +132,7 @@ fn run(
         fps,
         bitrate,
     };
-    let (encoder, name, activate) = create_encoder(&device, &format)?;
+    let (device, context, encoder, name, activate) = open_encoder(&format)?;
     info!(
         "source {}x{} → {width}x{height} @ {fps} fps, {} kb/s, encodeur {name}",
         src.Width,
@@ -163,14 +164,21 @@ fn shutdown_encoder(mft: &IMFTransform, activate: &IMFActivate) {
     }
 }
 
-fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+/// Device D3D11 sur `adapter`, ou sur le GPU par défaut.
+fn create_device(adapter: Option<&IDXGIAdapter>) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     let mut device = None;
     let mut context = None;
+    // Avec un adaptateur précis, le type de pilote doit être UNKNOWN.
+    let driver = if adapter.is_some() {
+        D3D_DRIVER_TYPE_UNKNOWN
+    } else {
+        D3D_DRIVER_TYPE_HARDWARE
+    };
     // SAFETY: appels D3D11 standards, pointeurs de sortie valides.
     unsafe {
         D3D11CreateDevice(
-            None,
-            D3D_DRIVER_TYPE_HARDWARE,
+            adapter,
+            driver,
             HMODULE::default(),
             // VIDEO_SUPPORT : requis par le VideoProcessor et l'encodeur MF.
             D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
@@ -190,11 +198,44 @@ fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     }
 }
 
-/// Renvoie aussi l'`IMFActivate` qui a créé l'encodeur : il faut l'arrêter à la fin.
-fn create_encoder(
-    device: &ID3D11Device,
+/// Encodeur H.264 matériel et device D3D11 sur la même carte graphique. Sur un PC à
+/// deux GPU (iGPU + NVIDIA), le premier encodeur listé peut appartenir à une autre carte
+/// que le GPU par défaut, et refuse alors le device (SET_D3D_MANAGER : E_FAIL). Le
+/// device est donc créé sur la carte de chaque encodeur, et on passe au suivant si
+/// l'un échoue. Renvoie aussi l'`IMFActivate` : il faut l'arrêter à la fin.
+fn open_encoder(
     format: &VideoFormat,
-) -> Result<(IMFTransform, String, IMFActivate)> {
+) -> Result<(
+    ID3D11Device,
+    ID3D11DeviceContext,
+    IMFTransform,
+    String,
+    IMFActivate,
+)> {
+    let mut refused = Vec::new();
+    for activate in hardware_encoders()? {
+        let name = friendly_name(&activate).unwrap_or_else(|_| "encodeur inconnu".into());
+        match try_encoder(&activate, format) {
+            Ok((device, context, mft)) => return Ok((device, context, mft, name, activate)),
+            Err(e) => {
+                warn!("encodeur {name} écarté : {e:#}");
+                refused.push(format!("{name} ({e:#})"));
+                // SAFETY: libère l'encodeur éventuellement créé par cet IMFActivate.
+                let _ = unsafe { activate.ShutdownObject() };
+            }
+        }
+    }
+    if refused.is_empty() {
+        bail!("aucun encodeur H.264 matériel");
+    }
+    bail!(
+        "aucun encodeur H.264 matériel utilisable : {}",
+        refused.join(" ; ")
+    )
+}
+
+/// Encodeurs H.264 matériels, du préféré au moins préféré (ordre de Media Foundation).
+fn hardware_encoders() -> Result<Vec<IMFActivate>> {
     // SAFETY: API MF documentée ; le tableau d'IMFActivate est libéré par CoTaskMemFree.
     unsafe {
         let input = MFT_REGISTER_TYPE_INFO {
@@ -216,22 +257,63 @@ fn create_encoder(
             &mut count,
         )
         .context("MFTEnumEx")?;
-        if count == 0 {
-            bail!("aucun encodeur H.264 matériel");
+        if list.is_null() {
+            return Ok(Vec::new());
         }
-        let activates = std::slice::from_raw_parts_mut(list, count as usize);
-        let activate = activates[0].take().context("IMFActivate nul")?;
-        for a in activates.iter_mut() {
-            a.take();
-        }
+        let activates = std::slice::from_raw_parts_mut(list, count as usize)
+            .iter_mut()
+            .filter_map(Option::take)
+            .collect();
         CoTaskMemFree(Some(list as _));
+        Ok(activates)
+    }
+}
 
+fn friendly_name(activate: &IMFActivate) -> Result<String> {
+    // SAFETY: chaîne allouée par MF, copiée puis libérée par CoTaskMemFree.
+    unsafe {
         let mut name = windows::core::PWSTR::null();
         let mut len = 0;
-        activate.GetAllocatedString(&MFT_FRIENDLY_NAME_Attribute, &mut name, &mut len)?;
-        let friendly = name.to_string()?;
+        activate
+            .GetAllocatedString(&MFT_FRIENDLY_NAME_Attribute, &mut name, &mut len)
+            .context("MFT_FRIENDLY_NAME")?;
+        let friendly = name.to_string();
         CoTaskMemFree(Some(name.0 as _));
+        Ok(friendly?)
+    }
+}
 
+/// Carte graphique de l'encodeur (`MFT_ENUM_ADAPTER_LUID`) ; `None` s'il ne la donne
+/// pas : le GPU par défaut est alors essayé.
+fn encoder_adapter(activate: &IMFActivate) -> Result<Option<IDXGIAdapter>> {
+    let mut luid = [0u8; size_of::<LUID>()];
+    // SAFETY: tampon de la taille d'un LUID ; attribut absent = erreur, ignorée.
+    if unsafe { activate.GetBlob(&MFT_ENUM_ADAPTER_LUID, &mut luid, None) }.is_err() {
+        return Ok(None);
+    }
+    let luid = LUID {
+        LowPart: u32::from_le_bytes(luid[..4].try_into()?),
+        HighPart: i32::from_le_bytes(luid[4..].try_into()?),
+    };
+    // SAFETY: fabrique DXGI standard ; l'adaptateur est recherché par son LUID.
+    unsafe {
+        let factory: IDXGIFactory4 = CreateDXGIFactory1().context("CreateDXGIFactory1")?;
+        Ok(Some(
+            factory
+                .EnumAdapterByLuid(luid)
+                .context("EnumAdapterByLuid")?,
+        ))
+    }
+}
+
+fn try_encoder(
+    activate: &IMFActivate,
+    format: &VideoFormat,
+) -> Result<(ID3D11Device, ID3D11DeviceContext, IMFTransform)> {
+    let adapter = encoder_adapter(activate)?;
+    let (device, context) = create_device(adapter.as_ref())?;
+    // SAFETY: API MF documentée, objets créés et configurés sur ce thread.
+    unsafe {
         let mft: IMFTransform = activate.ActivateObject().context("ActivateObject")?;
         mft.GetAttributes()?
             .SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
@@ -240,7 +322,7 @@ fn create_encoder(
         let mut manager = None;
         MFCreateDXGIDeviceManager(&mut token, &mut manager)?;
         let manager = manager.context("device manager nul")?;
-        manager.ResetDevice(device, token)?;
+        manager.ResetDevice(&device, token)?;
         mft.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, manager.as_raw() as usize)
             .context("SET_D3D_MANAGER")?;
 
@@ -272,7 +354,7 @@ fn create_encoder(
             .context("SetInputType")?;
         mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
         mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-        Ok((mft, friendly, activate))
+        Ok((device, context, mft))
     }
 }
 
