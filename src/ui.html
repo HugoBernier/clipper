@@ -178,7 +178,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   });
 
   function showState(lines) {
-    const state = Object.fromEntries(lines.map(line => {
+    const state = Object.fromEntries(lines.filter(Boolean).map(line => {
       const i = line.indexOf('=');
       return [line.slice(0, i), line.slice(i + 1)];
     }));
@@ -194,7 +194,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     micButton.disabled = off;
     form.elements.microphone_volume.disabled = off;
     for (const el of form.elements) {
-      if (!(el.name in state)) continue;
+      if (!el.name || !(el.name in state)) continue;
       if (el.type === 'checkbox') el.checked = state[el.name] === 'true';
       else el.value = state[el.name];
     }
