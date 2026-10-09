@@ -60,4 +60,5 @@ Clipper is a background replay buffer for Windows: one hotkey keeps the last sec
 - **MainWindow** (default): RecStatus, Ouvrir le dossier, tabs Clips / Réglages; Clips = ClipItem list + ClipPlayer side by side.
 - **SettingsView**: Résolution, Images/s, Qualité, Durée, Taille estimée · Micro, Périphérique, Volume micro · Raccourci, Dossier, Démarrer avec Windows.
 - **Dialog**: Supprimer ce clip ? and Renommer, in place of the browser's `confirm()` and `prompt()`.
+- **Dropdown**: every list is drawn by the design system (Périphérique); never the system's `<select>`.
 - **EmptyState** replaces the library until the first clip.

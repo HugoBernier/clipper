@@ -137,10 +137,22 @@
   .cl-seg button:hover { color: var(--ink); }
   .cl-seg button[aria-checked="true"] { background: var(--surface-1); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
 
-  /* Select */
-  .cl-select { position: relative; display: inline-flex; align-items: center; max-width: 280px; }
-  .cl-select select { appearance: none; -webkit-appearance: none; width: 100%; height: var(--control-h); padding: 0 32px 0 var(--space-3); background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font: 400 14px/20px var(--font-ui); text-overflow: ellipsis; cursor: pointer; }
-  .cl-select .cl-icon { position: absolute; right: var(--space-2); pointer-events: none; color: var(--ink-muted); }
+  /* Dropdown (custom list, not the system one) */
+  .cl-dropdown { position: relative; display: inline-flex; }
+  .cl-dropdown__button { display: inline-flex; align-items: center; gap: var(--space-2); width: 280px; height: var(--control-h); padding: 0 var(--space-2) 0 var(--space-3); background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font: 400 14px/20px var(--font-ui); text-align: left; cursor: pointer; }
+  .cl-dropdown__button:hover { border-color: var(--ink-muted); }
+  .cl-dropdown__button[aria-expanded="true"] { border-color: var(--ink-muted); }
+  .cl-dropdown__value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cl-dropdown__button .cl-icon { color: var(--ink-muted); }
+  .cl-dropdown__button[aria-expanded="true"] .cl-icon { transform: rotate(180deg); }
+  .cl-dropdown__menu { position: absolute; top: calc(100% + var(--space-1)); right: 0; z-index: 20; min-width: 100%; max-width: 360px; max-height: 240px; overflow: auto; padding: var(--space-1); background: var(--surface-1); border: 1px solid var(--line-strong); border-radius: var(--radius-md); }
+  .cl-dropdown__option { display: flex; align-items: center; gap: var(--space-2); height: var(--control-h); padding: 0 var(--space-2); border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; }
+  .cl-dropdown__option span { overflow: hidden; text-overflow: ellipsis; }
+  .cl-dropdown__option .cl-icon { visibility: hidden; color: var(--ink); }
+  .cl-dropdown__option[aria-selected="true"] { font-weight: 600; }
+  .cl-dropdown__option[aria-selected="true"] .cl-icon { visibility: visible; }
+  .cl-dropdown__option:hover, .cl-dropdown__option.is-active { background: var(--surface-2); }
+  .cl-dropdown__option.is-missing { color: var(--ink-muted); }
 
   /* Number and text fields */
   .cl-number, .cl-field { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); }
@@ -291,7 +303,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     <div class="cl-setting" data-key="microphone"><span class="cl-setting__label"><span>Micro</span></span>
       <span class="cl-setting__value"><label class="cl-switch"><input type="checkbox" role="switch" name="microphone" aria-label="Micro"><span class="cl-switch__track"></span></label></span></div>
     <div class="cl-setting" data-key="microphone_device" data-mic><span class="cl-setting__label"><span>Périphérique</span></span>
-      <span class="cl-setting__value"><span class="cl-select"><select name="microphone_device" aria-label="Micro utilisé"></select><svg class="cl-icon"><use href="#i-chevron"/></svg></span></span></div>
+      <span class="cl-setting__value"><div class="cl-dropdown" id="mic">
+        <button type="button" class="cl-dropdown__button" aria-haspopup="listbox" aria-expanded="false" aria-label="Micro utilisé"><span class="cl-dropdown__value"></span><svg class="cl-icon"><use href="#i-chevron"/></svg></button>
+        <div class="cl-dropdown__menu" role="listbox" aria-label="Micro utilisé" hidden></div>
+      </div></span></div>
     <div class="cl-setting" data-key="microphone_volume" data-mic><span class="cl-setting__label"><span>Volume micro</span></span>
       <span class="cl-setting__value"><span class="cl-slider"><input type="range" name="microphone_volume" min="0" max="200" step="5" aria-label="Volume micro"><output id="volume"></output></span></span></div>
   </section>
@@ -362,17 +377,16 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       const i = line.indexOf('=');
       return [line.slice(0, i), line.slice(i + 1)];
     }));
-    // Liste des micros avant d'y sélectionner le micro choisi.
-    const mics = form.elements.microphone_device;
-    mics.textContent = '';
-    mics.append(new Option('Par défaut', ''));
+    // Liste des micros, puis le micro choisi.
+    const mics = [['', 'Par défaut']];
     const parts = (state.microphones ?? '').split('\t');
-    for (let i = 0; i + 1 < parts.length; i += 2) mics.append(new Option(parts[i + 1], parts[i]));
-    if (![...mics.options].some(o => o.value === state.microphone_device)) {
+    for (let i = 0; i + 1 < parts.length; i += 2) mics.push([parts[i], parts[i + 1]]);
+    if (!mics.some(([id]) => id === state.microphone_device)) {
       // Liste indisponible : on ne sait pas s'il est branché.
-      const label = state.microphones === undefined ? 'Micro choisi' : 'Micro choisi (débranché)';
-      mics.append(new Option(label, state.microphone_device));
+      const unknown = state.microphones === undefined;
+      mics.push([state.microphone_device, unknown ? 'Micro choisi' : 'Micro choisi (débranché)', !unknown]);
     }
+    showMics(mics, state.microphone_device);
     for (const el of form.elements) {
       if (!(el.name in state)) continue;
       if (el.type === 'checkbox') el.checked = state[el.name] === 'true';
@@ -404,6 +418,60 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       row.querySelector('.cl-setting__label').append(error);
     }
   }
+
+  // Périphérique : liste dessinée par le design system (Dropdown), pas un <select>.
+  const mic = $('mic');
+  const micButton = mic.querySelector('.cl-dropdown__button');
+  const micMenu = mic.querySelector('.cl-dropdown__menu');
+  function showMics(mics, chosen) {
+    micMenu.replaceChildren(...mics.map(([id, name, missing]) => {
+      const option = Object.assign(document.createElement('div'), { className: 'cl-dropdown__option' + (missing ? ' is-missing' : '') });
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(id === chosen));
+      option.dataset.value = id;
+      option.innerHTML = '<svg class="cl-icon"><use href="#i-check"/></svg>';
+      option.append(Object.assign(document.createElement('span'), { textContent: name }));
+      return option;
+    }));
+    mic.querySelector('.cl-dropdown__value').textContent = mics.find(([id]) => id === chosen)?.[1] ?? '';
+  }
+  function micOpen(open) {
+    micButton.setAttribute('aria-expanded', String(open));
+    micMenu.hidden = !open;
+    for (const o of micMenu.children) o.classList.toggle('is-active', open && o.getAttribute('aria-selected') === 'true');
+    if (!open) micButton.focus();
+  }
+  function micPick(option) {
+    micOpen(false);
+    if (option.getAttribute('aria-selected') === 'true') return;
+    lastKey = 'microphone_device';
+    send('set', `microphone_device=${option.dataset.value}`);
+  }
+  micButton.addEventListener('click', () => micOpen(micMenu.hidden));
+  micMenu.addEventListener('click', e => {
+    const option = e.target.closest('.cl-dropdown__option');
+    if (option) micPick(option);
+  });
+  document.addEventListener('click', e => { if (!micMenu.hidden && !mic.contains(e.target)) micOpen(false); });
+  mic.addEventListener('keydown', e => {
+    const options = [...micMenu.children];
+    const active = options.findIndex(o => o.classList.contains('is-active'));
+    if (micMenu.hidden) {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); micOpen(true); }
+      return;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); micOpen(false); }
+    else if (e.key === 'Tab') micOpen(false);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = Math.max(0, Math.min(options.length - 1, active + (e.key === 'ArrowDown' ? 1 : -1)));
+      options.forEach((o, i) => o.classList.toggle('is-active', i === next));
+      options[next].scrollIntoView({ block: 'nearest' });
+    } else if ((e.key === 'Enter' || e.key === ' ') && active >= 0) {
+      e.preventDefault();
+      micPick(options[active]);
+    }
+  });
 
   function showHotkey() {
     const cell = $('hotkey-cell');
