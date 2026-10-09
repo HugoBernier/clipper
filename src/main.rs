@@ -42,8 +42,8 @@ use crate::video::Video;
 const AUDIO_BPS: u32 = 160_000;
 /// Identifiant du raccourci global (un seul).
 const HOTKEY_ID: i32 = 1;
-/// Délai max d'une sauvegarde en cours quand on quitte.
-const QUIT_WAIT: Duration = Duration::from_secs(10);
+/// Délai max d'une sauvegarde en cours, avant de quitter ou de changer de format.
+const SAVE_WAIT: Duration = Duration::from_secs(10);
 /// Délai max pour que l'encodeur rattrape l'instant de l'appui.
 const CATCH_UP: Duration = Duration::from_secs(2);
 
@@ -167,9 +167,9 @@ fn run() -> Result<()> {
         video,
         microphone,
         tray,
+        saving: Arc::new(AtomicBool::new(false)),
     };
 
-    let saving = Arc::new(AtomicBool::new(false));
     let mut msg = MSG::default();
     // SAFETY: boucle de messages standard du thread courant.
     while unsafe { GetMessageW(&mut msg, None, 0, 0) }.0 > 0 {
@@ -184,7 +184,7 @@ fn run() -> Result<()> {
                     ui::post(&reply);
                 }
             }
-            WM_HOTKEY => app.save(&saving, audio.as_ref()),
+            WM_HOTKEY => app.save(audio.as_ref()),
             _ => {
                 // Messages des fenêtres (icône, réglages).
                 // SAFETY: message reçu par GetMessageW, transmis tel quel.
@@ -200,10 +200,7 @@ fn run() -> Result<()> {
         bail!("arrêt : erreur vidéo");
     }
     // « Quitter » : on laisse finir une sauvegarde en cours.
-    let deadline = Instant::now() + QUIT_WAIT;
-    while saving.load(Ordering::SeqCst) && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    app.wait_for_save();
     info!("arrêt demandé");
     Ok(())
 }
@@ -217,21 +214,23 @@ struct App {
     video: Video,
     microphone: Arc<Microphone>,
     tray: Option<tray::Tray>,
+    /// Une sauvegarde est en cours.
+    saving: Arc<AtomicBool>,
 }
 
 impl App {
     /// Appui sur le raccourci : sauvegarde dans un thread, une seule à la fois.
-    fn save(&self, saving: &Arc<AtomicBool>, audio: Option<&AudioFormat>) {
+    fn save(&self, audio: Option<&AudioFormat>) {
         let pressed = mf::now();
         // Comme OBS : une seule sauvegarde à la fois, l'appui suivant est ignoré.
-        if saving.swap(true, Ordering::SeqCst) {
+        if self.saving.swap(true, Ordering::SeqCst) {
             warn!("sauvegarde déjà en cours, appui ignoré");
             return;
         }
         let clip = i64::from(self.config.clip_seconds) * SEC;
         let (ring, saving, out_dir, audio, format) = (
             self.ring.clone(),
-            saving.clone(),
+            self.saving.clone(),
             self.out_dir.clone(),
             audio.cloned(),
             self.video.format,
@@ -324,6 +323,8 @@ impl App {
     /// Nouveau format vidéo : buffer vidé (ses images n'ont plus le format de
     /// l'encodeur). Si le nouveau format échoue, l'ancien est relancé.
     fn restart_video(&mut self, next: &Config) -> Result<()> {
+        // La sauvegarde en cours lit le buffer au format actuel.
+        self.wait_for_save();
         self.video.stop();
         self.ring
             .lock()
@@ -339,6 +340,13 @@ impl App {
                     .context("ancien format vidéo non relancé")?;
                 Err(e)
             }
+        }
+    }
+
+    fn wait_for_save(&self) {
+        let deadline = Instant::now() + SAVE_WAIT;
+        while self.saving.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 

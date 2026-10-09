@@ -48,8 +48,9 @@ const APPROVED_KEY: PCWSTR =
 const APPROVED_VALUE: PCWSTR = w!("Clipper.lnk");
 /// 1er octet pair = activé (02), impair = désactivé (03) ; le reste est un horodatage.
 const APPROVED_ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-/// Icône de l'application (assets/clipper.rc), aussi utilisée pour la notification.
-const ICON_RESOURCE: u16 = 1;
+/// Icône de l'application (assets/clipper.rc), aussi utilisée pour la notification et
+/// la fenêtre.
+pub const ICON_RESOURCE: u16 = 1;
 
 /// État lu par la procédure de fenêtre (fonction `extern "system"` sans contexte).
 static CLIPS_DIR: Mutex<PathBuf> = Mutex::new(PathBuf::new());

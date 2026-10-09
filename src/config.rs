@@ -102,8 +102,11 @@ impl Config {
             return Ok(config);
         }
         let text = std::fs::read_to_string(path)?;
-        let config: Self =
+        let mut config: Self =
             toml::from_str(&text).with_context(|| format!("lecture de {}", path.display()))?;
+        // La 0.1 acceptait toute durée > 0 : on la ramène dans les bornes plutôt que de
+        // refuser de démarrer.
+        config.clip_seconds = config.clip_seconds.clamp(10, 300);
         config.validate()?;
         Ok(config)
     }
@@ -227,6 +230,12 @@ pub fn parse_hotkey(text: &str) -> Result<Hotkey> {
         }
     }
     let vk = vk.with_context(|| format!("raccourci « {text} » : touche manquante"))?;
+    // Lettre ou chiffre seuls : RegisterHotKey les prendrait à toutes les applications.
+    let function_key = (0x70..=0x87).contains(&vk);
+    ensure!(
+        modifiers != 0 || function_key,
+        "raccourci « {text} » : une lettre ou un chiffre demandent Ctrl, Alt, Shift ou Win"
+    );
     Ok(Hotkey { modifiers, vk })
 }
 
@@ -326,8 +335,35 @@ mod tests {
 
     #[test]
     fn rejects_bad_hotkeys() {
-        for bad in ["Alt", "Alt+F25", "Alt+F0", "Ctrl+A+B", "Alt+Tab", ""] {
+        // Une lettre ou un chiffre seuls seraient pris à toutes les applications.
+        for bad in [
+            "Alt", "Alt+F25", "Alt+F0", "Ctrl+A+B", "Alt+Tab", "", "A", "3", "shift",
+        ] {
             assert!(parse_hotkey(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn function_key_alone_is_allowed() {
+        assert_eq!(
+            parse_hotkey("F9").unwrap(),
+            Hotkey {
+                modifiers: 0,
+                vk: 0x78
+            }
+        );
+    }
+
+    #[test]
+    fn out_of_range_duration_from_an_old_file_is_clamped() {
+        // La 0.1 acceptait toute durée > 0 : un ancien fichier ne doit pas empêcher
+        // Clipper de démarrer.
+        for (seconds, kept) in [(5, 10), (600, 300)] {
+            let path = temp_path(&format!("clamp-{seconds}"));
+            std::fs::write(&path, format!("clip_seconds = {seconds}")).unwrap();
+            let config = Config::load_or_create(&path).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            assert_eq!(config.clip_seconds, kept);
         }
     }
 

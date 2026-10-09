@@ -32,6 +32,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HRESULT, HSTRING, PCWSTR, PWSTR, w};
 
+use crate::tray;
+
 /// Envoyé au thread principal : des messages de la page attendent (`take_requests`).
 pub const WM_UI: u32 = WM_APP + 3;
 const CLASS: PCWSTR = w!("ClipperWindow");
@@ -141,18 +143,25 @@ pub fn pick_folder(current: &Path) -> Result<Option<PathBuf>> {
     unsafe {
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
             .context("FileOpenDialog")?;
-        dialog.SetOptions(dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)?;
+        let options = dialog.GetOptions().context("GetOptions")?;
+        dialog
+            .SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)
+            .context("SetOptions")?;
         if let Ok(folder) = SHCreateItemFromParsingName::<_, _, IShellItem>(
             &HSTRING::from(current.as_os_str()),
             None,
         ) {
-            dialog.SetFolder(&folder)?;
+            dialog.SetFolder(&folder).context("SetFolder")?;
         }
         match dialog.Show(current_hwnd()) {
             Err(e) if e.code() == HRESULT::from_win32(ERROR_CANCELLED.0) => return Ok(None),
             result => result.context("sélecteur de dossier")?,
         }
-        let path = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+        let path = dialog
+            .GetResult()
+            .context("GetResult")?
+            .GetDisplayName(SIGDN_FILESYSPATH)
+            .context("GetDisplayName")?;
         let result = path.to_string();
         CoTaskMemFree(Some(path.0 as _));
         Ok(Some(PathBuf::from(result?)))
@@ -174,8 +183,11 @@ fn register_class() -> Result<()> {
                     lpfnWndProc: Some(window_proc),
                     hInstance: instance.into(),
                     hCursor: LoadCursorW(None, IDC_ARROW)?,
-                    // Même icône que l'exe (ressource 1).
-                    hIcon: LoadIconW(Some(instance.into()), PCWSTR(1 as _))?,
+                    // SAFETY (MAKEINTRESOURCE) : id de ressource casté en pointeur.
+                    hIcon: LoadIconW(
+                        Some(instance.into()),
+                        PCWSTR(tray::ICON_RESOURCE as usize as *const u16),
+                    )?,
                     lpszClassName: CLASS,
                     ..Default::default()
                 };
