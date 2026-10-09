@@ -2,10 +2,13 @@
 
 mod audio;
 mod config;
+mod library;
 mod mf;
 mod mix;
+mod mp4box;
 mod ring;
 mod save;
+mod shell;
 mod tray;
 mod ui;
 mod video;
@@ -16,10 +19,10 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use log::{error, info, warn};
 use windows::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
+    ERROR_ALREADY_EXISTS, ERROR_SHARING_VIOLATION, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -31,12 +34,13 @@ use windows::Win32::UI::HiDpi::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey,
 };
+use windows::Win32::UI::Shell::COPYENGINE_E_SHARING_VIOLATION_SRC;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HWND_MESSAGE, MB_ICONHAND,
     MB_OK, MESSAGEBOX_STYLE, MSG, PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_HOTKEY, WNDCLASSW,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_HOTKEY, WNDCLASSW,
 };
-use windows::core::w;
+use windows::core::{HRESULT, w};
 
 use crate::audio::Microphone;
 use crate::config::{Config, Hotkey, parse_hotkey};
@@ -46,6 +50,8 @@ use crate::video::Video;
 
 /// AAC 160 kb/s (débits possibles de l'encodeur Windows : 96, 128, 160, 192).
 const AUDIO_BPS: u32 = 160_000;
+/// La liste des clips a changé (clip sauvegardé, autre dossier).
+const WM_CLIPS_CHANGED: u32 = WM_APP + 4;
 /// Identifiant du raccourci global (un seul).
 const HOTKEY_ID: i32 = 1;
 /// Délai max d'une sauvegarde en cours, avant de quitter ou de changer de format.
@@ -166,6 +172,7 @@ fn run() -> Result<()> {
         .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
         .ok();
     tray::set_microphone(config.microphone);
+    ui::set_clips_dir(&out_dir);
     let saving = Arc::new(AtomicBool::new(false));
     APP.with_borrow_mut(|app| {
         *app = Some(App {
@@ -245,6 +252,9 @@ fn with_app(f: impl FnOnce(&mut App)) {
 /// éventuelle.
 fn handle_ui(request: &str) {
     let (command, arg) = request.split_once('\n').unwrap_or((request, ""));
+    if handle_library(command, arg) {
+        return;
+    }
     // Le sélecteur de dossier est une boucle modale : on l'ouvre sans tenir l'état,
     // pour qu'un appui sur le raccourci pendant ce temps soit traité.
     let mut picked = Ok(None);
@@ -289,6 +299,99 @@ fn handle_ui(request: &str) {
     });
 }
 
+/// Bibliothèque de clips ; `false` si `command` n'en relève pas. L'action est faite
+/// sans tenir l'état (le glisser et la corbeille ouvrent des boucles modales), puis la
+/// liste est renvoyée si elle a pu changer.
+fn handle_library(command: &str, arg: &str) -> bool {
+    let refresh = match command {
+        "clips" | "delete" | "rename" => true,
+        "copy" | "drag" | "reveal" => false,
+        _ => return false,
+    };
+    let mut dir = None;
+    with_app(|app| dir = Some(app.out_dir.clone()));
+    let Some(dir) = dir else {
+        ui::post("error\nClipper est occupé, réessayez.");
+        return true;
+    };
+    let clip = |name: &str| -> Result<PathBuf> {
+        let path = library::clip_path(&dir, name)?;
+        ensure!(path.is_file(), "clip introuvable : {name}");
+        Ok(path)
+    };
+    let owner = ui::current_hwnd();
+    let result = match command {
+        "copy" => clip(arg).and_then(|p| shell::copy(&p)),
+        "drag" => clip(arg).and_then(|p| shell::drag(owner, &p)),
+        "reveal" => clip(arg).and_then(|p| shell::reveal(&p)),
+        "delete" => clip(arg).and_then(|p| retry_while_in_use(|| shell::recycle(owner, &p))),
+        "rename" => match arg.split_once('\t') {
+            Some((old, new)) => {
+                let mut renamed = String::new();
+                retry_while_in_use(|| library::rename(&dir, old, new).map(|n| renamed = n))
+                    // La page resélectionne le clip sous son nouveau nom.
+                    .inspect(|()| ui::post(&format!("renamed\n{renamed}")))
+            }
+            None => Err(anyhow!("renommage mal formé : {arg}")),
+        },
+        _ => Ok(()),
+    };
+    match &result {
+        Ok(()) if command == "copy" => ui::post(&format!("copied\n{arg}")),
+        Ok(()) => {}
+        Err(e) => {
+            warn!("{command} : {e:#}");
+            ui::post(&format!("error\n{e:#}"));
+        }
+    }
+    if refresh {
+        post_clips(&dir);
+    }
+    true
+}
+
+/// Le lecteur vient de lâcher le clip, mais le moteur de la page ferme le fichier un
+/// peu après : un renommage ou une suppression immédiats peuvent le trouver ouvert.
+/// Seule cette erreur est réessayée (pas un refus, ni une suppression annulée).
+fn retry_while_in_use(mut action: impl FnMut() -> Result<()>) -> Result<()> {
+    for _ in 0..4 {
+        match action() {
+            Err(e) if file_in_use(&e) => std::thread::sleep(Duration::from_millis(150)),
+            result => return result,
+        }
+    }
+    action()
+}
+
+fn file_in_use(e: &anyhow::Error) -> bool {
+    let violation = ERROR_SHARING_VIOLATION.0;
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::raw_os_error)
+            == Some(violation as i32)
+            || cause
+                .downcast_ref::<windows::core::Error>()
+                .is_some_and(|w| {
+                    w.code() == HRESULT::from_win32(violation)
+                        || w.code() == COPYENGINE_E_SHARING_VIOLATION_SRC
+                })
+    })
+}
+
+fn post_clips(dir: &Path) {
+    match library::list(dir) {
+        Ok(clips) => {
+            let lines: Vec<String> = clips.iter().map(library::ClipInfo::line).collect();
+            ui::post(&format!("clips\n{}", lines.join("\n")));
+        }
+        Err(e) => {
+            warn!("liste des clips : {e:#}");
+            ui::post(&format!("error\n{e:#}"));
+        }
+    }
+}
+
 impl App {
     /// Appui sur le raccourci : sauvegarde dans un thread, une seule à la fois.
     fn save(&self) {
@@ -311,6 +414,8 @@ impl App {
                 Ok(path) => {
                     info!("clip sauvegardé : {}", path.display());
                     beep(true);
+                    // La bibliothèque ouverte affiche le nouveau clip.
+                    post_to_main(WM_CLIPS_CHANGED);
                 }
                 Err(e) => {
                     error!("échec de la sauvegarde : {e:#}");
@@ -358,8 +463,14 @@ impl App {
             .volume
             .store(next.microphone_volume, Ordering::Relaxed);
         tray::set_microphone(next.microphone);
-        self.out_dir = out_dir;
-        tray::set_clips_dir(self.out_dir.clone());
+        // Remapper le dossier du lecteur couperait une lecture en cours : seulement s'il
+        // change, et la liste suit.
+        if out_dir != self.out_dir {
+            tray::set_clips_dir(out_dir.clone());
+            // La page ouverte se recharge et redemande la liste.
+            ui::set_clips_dir(&out_dir);
+            self.out_dir = out_dir;
+        }
         if let Some(tray) = &self.tray {
             tray.set_tooltip(&tooltip(&next));
         }
@@ -516,6 +627,7 @@ extern "system" fn main_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
                 handle_ui(&request);
             }
         }
+        WM_CLIPS_CHANGED if ui::current_hwnd().is_some() => handle_ui("clips"),
         // SAFETY: traitement par défaut des autres messages.
         _ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }

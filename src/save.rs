@@ -11,6 +11,7 @@ use windows::core::HSTRING;
 
 use crate::audio;
 use crate::mf::{AudioFormat, SEC, VideoFormat};
+use crate::mp4box;
 use crate::ring::{Clip, Packet};
 
 /// Durée d'une trame AAC : 1024 échantillons.
@@ -170,7 +171,7 @@ fn sequence_header(au: &[u8]) -> Option<Vec<u8>> {
 /// Algorithme de qt-faststart (ffmpeg) : place `moov` devant `mdat` et décale chaque
 /// offset de chunk (`stco`/`co64`) de la taille du `moov`.
 fn faststart(file: Vec<u8>) -> Result<Vec<u8>> {
-    let boxes = parse_boxes(&file, 0, file.len())?;
+    let boxes = mp4box::parse(&file, 0, file.len())?;
     let find = |kind: &[u8; 4]| boxes.iter().position(|b| &b.kind == kind);
     let (Some(moov), Some(mdat)) = (find(b"moov"), find(b"mdat")) else {
         bail!("moov ou mdat absent");
@@ -193,52 +194,11 @@ fn faststart(file: Vec<u8>) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-struct Mp4Box {
-    kind: [u8; 4],
-    start: usize,
-    len: usize,
-    header: usize,
-}
-
-impl Mp4Box {
-    fn range(&self) -> std::ops::Range<usize> {
-        self.start..self.start + self.len
-    }
-}
-
-fn parse_boxes(data: &[u8], from: usize, to: usize) -> Result<Vec<Mp4Box>> {
-    let mut boxes = Vec::new();
-    let mut i = from;
-    while i < to {
-        let head = data.get(i..i + 8).context("en-tête de boîte tronqué")?;
-        let (len, header) = match u32::from_be_bytes([head[0], head[1], head[2], head[3]]) {
-            0 => (to - i, 8),
-            1 => {
-                let wide = data.get(i + 8..i + 16).context("boîte 64 bits tronquée")?;
-                (u64::from_be_bytes(wide.try_into()?) as usize, 16)
-            }
-            n => (n as usize, 8),
-        };
-        if len < header || i + len > to {
-            bail!("boîte invalide à l'offset {i}");
-        }
-        let kind = [head[4], head[5], head[6], head[7]];
-        boxes.push(Mp4Box {
-            kind,
-            start: i,
-            len,
-            header,
-        });
-        i += len;
-    }
-    Ok(boxes)
-}
-
 /// Descend moov/trak/mdia/minf/stbl et décale les entrées de stco (32 bits) et co64.
 fn patch_chunk_offsets(moov: &mut [u8], shift: u64) -> Result<()> {
     let mut stack = vec![(8, moov.len())];
     while let Some((from, to)) = stack.pop() {
-        for b in parse_boxes(moov, from, to)? {
+        for b in mp4box::parse(moov, from, to)? {
             let body = b.start + b.header;
             match &b.kind {
                 b"trak" | b"mdia" | b"minf" | b"stbl" => stack.push((body, b.start + b.len)),
@@ -323,7 +283,7 @@ mod tests {
     }
 
     fn kinds(file: &[u8]) -> Vec<[u8; 4]> {
-        parse_boxes(file, 0, file.len())
+        mp4box::parse(file, 0, file.len())
             .unwrap()
             .iter()
             .map(|b| b.kind)
