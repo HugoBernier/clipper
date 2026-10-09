@@ -2,100 +2,344 @@
 <html lang="fr">
 <meta charset="utf-8">
 <title>Clipper</title>
-<!-- Visuel brut : le design system viendra à l'itération 11. -->
+<!-- Styles : copie de docs/design-system (tokens.css puis components/bundle.css), à
+     garder identique ; la page est chargée par NavigateToString, sans fichier à côté. -->
 <style>
-  body { font: 14px system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; }
-  nav { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid #8884; }
-  nav button[aria-selected="true"] { font-weight: bold; }
-  section { flex: 1; min-height: 0; }
-  #clips-view { display: flex; }
-  #clips-view[hidden], #settings-view[hidden] { display: none; }
-  #list { width: 340px; overflow: auto; border-right: 1px solid #8884; }
-  #list div { padding: 6px 12px; cursor: pointer; user-select: none; }
-  #list div.selected { background: #8883; }
-  #list small { display: block; opacity: .7; }
-  #viewer { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
-  video { flex: 1; min-height: 0; width: 100%; background: #000; }
-  #settings-view { overflow: auto; padding: 0 16px; max-width: 560px; }
-  label { display: block; margin: 12px 0; }
-  #error, #clip-status.error { color: #c00; }
+:root {
+    --surface-0: #16161a;
+    --surface-1: #1f1f24;
+    --surface-2: #2a2a31;
+    --line: #34343c;
+    --line-strong: #6e6e79;
+    --ink: #f4f4f5;
+    --ink-muted: #a1a1aa;
+    --rec: #e53935;
+    --rec-fill: #c62828;
+    --rec-fill-hover: #b71c1c;
+    --on-rec: #ffffff;
+    --rec-text: #ff6b63;
+    --ok-text: #4ade80;
+    --focus: #f4f4f5;
+    --tile: #2a2a31;
+    --tile-deep: #16161a;
+    --tile-ink: #f4f4f5;
+    --scrim: rgba(22, 22, 26, 0.72);
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --radius-full: 9999px;
+    --control-h: 32px;
+    --thumb-w: 96px;
+    --window-w: 960px;
+    --list-w: 340px;
+    --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  }
+  .title { font-family: var(--font-display); font-size: 20px; line-height: 28px; font-weight: 600; }
+  .heading { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 600; }
+  .body { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 400; }
+  .button { font-family: var(--font-ui); font-size: 14px; line-height: 20px; font-weight: 600; }
+  .caption { font-family: var(--font-ui); font-size: 12px; line-height: 16px; font-weight: 400; }
+  .mono { font-family: var(--font-mono); font-size: 13px; line-height: 18px; font-weight: 400; }
+  .chip { font-family: var(--font-mono); font-size: 11px; line-height: 14px; font-weight: 600; }
+
+  html, body { margin: 0; background: var(--surface-0); color: var(--ink); font-family: var(--font-ui); font-size: 14px; line-height: 20px; color-scheme: dark; }
+  *, *::before, *::after { box-sizing: border-box; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+  .cl-row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; padding: var(--space-4); }
+  .cl-stack { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
+  .cl-icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* Button */
+  .cl-btn { display: inline-flex; align-items: center; gap: var(--space-2); height: var(--control-h); padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md); font: 600 14px/20px var(--font-ui); cursor: pointer; white-space: nowrap; }
+  .cl-btn--primary { background: var(--rec-fill); color: var(--on-rec); }
+  .cl-btn--primary:hover { background: var(--rec-fill-hover); }
+  .cl-btn--secondary { background: var(--surface-2); color: var(--ink); border-color: var(--line); }
+  .cl-btn--secondary:hover { border-color: var(--line-strong); }
+  .cl-btn--ghost { background: transparent; color: var(--ink); }
+  .cl-btn--ghost:hover { background: var(--surface-2); }
+  .cl-btn--icon { width: var(--control-h); padding: 0; justify-content: center; }
+  .cl-btn:disabled { opacity: .45; cursor: default; pointer-events: none; }
+
+  /* Kbd */
+  .cl-kbd { display: inline-flex; gap: 2px; align-items: center; }
+  .cl-kbd kbd { font: 400 13px/18px var(--font-mono); padding: 1px var(--space-1); min-width: 22px; text-align: center; background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: var(--radius-sm); }
+  .cl-kbd span { color: var(--ink-muted); font-size: 12px; }
+
+  /* Record status */
+  .cl-status { display: inline-flex; align-items: center; gap: var(--space-2); }
+  .cl-dot { width: 10px; height: 10px; border-radius: var(--radius-full); background: var(--rec); flex: none; }
+  .cl-status--off .cl-dot { background: transparent; border: 2px solid var(--line-strong); }
+  .cl-status__text { display: flex; flex-direction: column; }
+  .cl-status__title { font-weight: 600; }
+  .cl-status__sub { font-size: 12px; line-height: 16px; color: var(--ink-muted); display: inline-flex; align-items: center; gap: var(--space-1); }
+
+  /* Tabs */
+  .cl-tabs { display: flex; gap: var(--space-1); border-bottom: 1px solid var(--line); }
+  .cl-tab { appearance: none; background: none; border: 0; padding: var(--space-2) var(--space-3); font: 600 14px/20px var(--font-ui); color: var(--ink-muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; gap: var(--space-2); align-items: center; }
+  .cl-tab:hover { color: var(--ink); }
+  .cl-tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--rec); }
+  .cl-count { font: 400 12px/16px var(--font-ui); color: var(--ink-muted); background: var(--surface-2); border-radius: var(--radius-full); padding: 0 6px; }
+
+  /* Library: list + player side by side */
+  .cl-library { display: flex; gap: var(--space-4); min-height: 0; flex: 1; }
+  .cl-clips { width: var(--list-w); flex: none; display: flex; flex-direction: column; background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: auto; }
+  .cl-clip { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-top: 1px solid var(--line); cursor: pointer; user-select: none; }
+  .cl-clip:first-child { border-top: 0; }
+  .cl-clip:hover { background: var(--surface-2); }
+  .cl-clip[aria-selected="true"] { background: var(--surface-2); }
+  .cl-clip:focus-visible { outline-offset: -2px; }
+  .cl-thumb { position: relative; width: var(--thumb-w); aspect-ratio: 16 / 9; flex: none; border-radius: var(--radius-md); background: var(--tile); overflow: hidden; }
+  .cl-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cl-thumb__chip { position: absolute; right: var(--space-1); bottom: var(--space-1); font: 600 11px/14px var(--font-mono); background: var(--tile-deep); color: var(--tile-ink); padding: 1px var(--space-1); border-radius: var(--radius-sm); }
+  .cl-clip__body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .cl-clip__title { font-weight: 600; }
+  .cl-clip__file { font: 400 13px/18px var(--font-mono); color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cl-clip__meta { font-size: 12px; line-height: 16px; color: var(--ink-muted); }
+  .cl-clip--new .cl-clip__title::after { content: "Nouveau"; margin-left: var(--space-2); font: 600 12px/16px var(--font-ui); color: var(--ok-text); }
+
+  .cl-viewer { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+  .cl-video { position: relative; aspect-ratio: 16 / 9; width: 100%; background: var(--tile); border-radius: var(--radius-md); overflow: hidden; color: var(--tile-ink); display: grid; place-items: center; }
+  .cl-video video { width: 100%; height: 100%; display: block; background: var(--tile); }
+  .cl-video__play { width: 56px; height: 56px; border-radius: var(--radius-full); background: var(--scrim); display: grid; place-items: center; }
+  .cl-video { cursor: grab; }
+  .cl-video__controls { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-2); background: var(--scrim); cursor: default; }
+  .cl-vbtn { appearance: none; border: 0; background: transparent; color: var(--tile-ink); width: 28px; height: 28px; border-radius: var(--radius-sm); display: grid; place-items: center; cursor: pointer; }
+  .cl-vbtn:hover { background: var(--tile); }
+  .cl-video__seek { flex: 1; min-width: 0; margin: 0; accent-color: var(--rec-fill); }
+  .cl-video__time { font: 400 12px/16px var(--font-mono); color: var(--tile-ink); }
+  .cl-viewer__info { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+  .cl-viewer__title { display: flex; flex-direction: column; min-width: 0; }
+  .cl-viewer__actions { display: flex; align-items: center; gap: var(--space-1); }
+  .cl-toast { display: inline-flex; align-items: center; gap: var(--space-1); font-size: 12px; line-height: 16px; color: var(--ink); margin-right: var(--space-2); }
+  .cl-toast > .cl-icon { color: var(--ok-text); }
+
+  /* Switch */
+  .cl-switch { position: relative; display: inline-flex; width: 40px; height: 20px; flex: none; }
+  .cl-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+  .cl-switch__track { width: 100%; height: 100%; border-radius: var(--radius-full); border: 1px solid var(--line-strong); position: relative; }
+  .cl-switch__track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: var(--radius-full); background: var(--ink-muted); }
+  .cl-switch input:checked + .cl-switch__track { background: var(--rec-fill); border-color: var(--rec-fill); }
+  .cl-switch input:checked + .cl-switch__track::after { left: 23px; background: var(--on-rec); }
+  .cl-switch input:focus-visible + .cl-switch__track { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+  /* Segmented */
+  .cl-seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--surface-2); border-radius: var(--radius-md); border: 1px solid var(--line); flex-wrap: wrap; }
+  .cl-seg button { appearance: none; border: 0; background: transparent; color: var(--ink-muted); font: 600 13px/18px var(--font-ui); padding: 5px var(--space-3); border-radius: var(--radius-sm); cursor: pointer; }
+  .cl-seg button:hover { color: var(--ink); }
+  .cl-seg button[aria-checked="true"] { background: var(--surface-1); color: var(--ink); box-shadow: 0 0 0 1px var(--line-strong); }
+
+  /* Select */
+  .cl-select { position: relative; display: inline-flex; align-items: center; max-width: 280px; }
+  .cl-select select { appearance: none; -webkit-appearance: none; width: 100%; height: var(--control-h); padding: 0 32px 0 var(--space-3); background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font: 400 14px/20px var(--font-ui); text-overflow: ellipsis; cursor: pointer; }
+  .cl-select .cl-icon { position: absolute; right: var(--space-2); pointer-events: none; color: var(--ink-muted); }
+
+  /* Number and text fields */
+  .cl-number, .cl-field { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); }
+  .cl-input { width: 64px; height: var(--control-h); padding: 0 var(--space-2); background: var(--surface-2); color: var(--ink); border: 1px solid var(--line-strong); border-radius: var(--radius-md); font: 400 13px/18px var(--font-mono); text-align: right; }
+  .cl-input--text { width: 100%; text-align: left; }
+  .cl-field { width: 100%; }
+
+  /* Slider */
+  .cl-slider { display: inline-flex; align-items: center; gap: var(--space-3); }
+  .cl-slider input[type="range"] { width: 160px; margin: 0; accent-color: var(--rec-fill); }
+  .cl-slider output { font: 400 13px/18px var(--font-mono); color: var(--ink-muted); min-width: 44px; text-align: right; }
+
+  /* Setting rows */
+  .cl-settings { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+  .cl-setting { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); flex-wrap: wrap; min-height: 56px; }
+  .cl-setting:first-child { border-top: 0; }
+  .cl-setting__label { display: flex; flex-direction: column; min-width: 0; }
+  .cl-setting__error { font-size: 12px; line-height: 16px; color: var(--rec-text); }
+  .cl-setting__value { display: flex; align-items: center; gap: var(--space-2); }
+  .cl-path { font: 400 13px/18px var(--font-mono); color: var(--ink-muted); max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cl-estimate { display: flex; flex-direction: column; align-items: flex-end; }
+  .cl-estimate__mb { font-weight: 600; }
+  .cl-estimate__detail { font: 400 12px/16px var(--font-mono); color: var(--ink-muted); }
+  .cl-capture { color: var(--ink-muted); font-size: 12px; }
+
+  /* Empty state */
+  .cl-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); text-align: center; padding: var(--space-8) var(--space-4); background: var(--surface-1); border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); }
+  .cl-empty__title { font-weight: 600; }
+  .cl-empty__text { color: var(--ink-muted); display: inline-flex; gap: var(--space-1); align-items: center; }
+
+  /* Dialog */
+  .cl-window, .cl-dialog-host { position: relative; }
+  .cl-dialogs-demo { display: flex; gap: var(--space-4); padding: var(--space-4); flex-wrap: wrap; }
+  .cl-dialog-host--demo { flex: 1 1 300px; min-height: 180px; }
+  .cl-scrim { position: absolute; inset: 0; background: var(--scrim); display: grid; place-items: center; z-index: 10; }
+  .cl-dialog { width: min(360px, calc(100% - 32px)); background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-2); margin: 0; }
+  .cl-dialog__title { font-weight: 600; }
+  .cl-dialog__actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+
+  /* Window */
+  .cl-window { width: var(--window-w); max-width: 100%; background: var(--surface-0); border: 1px solid var(--line); border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column; }
+  .cl-titlebar { display: flex; align-items: center; height: 32px; padding-left: var(--space-3); gap: var(--space-2); font-size: 12px; color: var(--ink-muted); user-select: none; }
+  .cl-titlebar img { width: 16px; height: 16px; }
+  .cl-titlebar__title { flex: 1; }
+  .cl-titlebar__btn { width: 46px; height: 32px; display: grid; place-items: center; color: var(--ink); }
+  .cl-titlebar__btn:hover { background: var(--surface-2); }
+  .cl-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) var(--space-6) var(--space-4); flex-wrap: wrap; }
+  .cl-nav { padding: 0 var(--space-6); }
+  .cl-body { padding: var(--space-4) var(--space-6) var(--space-6); display: flex; flex-direction: column; gap: var(--space-4); min-height: 420px; overflow: auto; }
+  .cl-body--clips { height: 480px; }
+
+/* Mise en page de la fenêtre (propre à ui.html). */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+.cl-nav { padding-top: var(--space-2); }
+.cl-body { flex: 1; min-height: 0; }
+.cl-body--clips { height: auto; overflow: hidden; }
+.cl-clips { min-height: 0; }
+.cl-viewer { min-height: 0; }
+.cl-video { aspect-ratio: auto; flex: 1; min-height: 0; cursor: grab; }
+.cl-video video { object-fit: contain; }
+.cl-video:fullscreen { border-radius: 0; }
+.cl-video:fullscreen video { height: 100%; }
+.cl-video__play { position: absolute; pointer-events: none; }
+.cl-viewer__info { flex: none; }
+.cl-toast.is-error { color: var(--rec-text); }
+.cl-toast.is-error > .cl-icon { display: none; }
+.cl-library > .cl-empty { flex: 1; justify-content: center; }
+.cl-setting.is-off .cl-setting__value { opacity: .45; pointer-events: none; }
+#form { display: flex; flex-direction: column; gap: var(--space-4); }
 </style>
-<nav>
-  <button id="tab-clips" aria-selected="true">Clips</button>
-  <button id="tab-settings" aria-selected="false">Réglages</button>
-</nav>
-<section id="clips-view">
-  <div id="list"></div>
-  <div id="viewer">
-    <video id="player" controls></video>
-    <div>
-      <button id="copy" disabled>Copier</button>
-      <button id="rename" disabled>Renommer…</button>
-      <button id="delete" disabled>Supprimer</button>
-      <button id="reveal" disabled>Montrer dans l'Explorateur</button>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-film" viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M6.5 6.5v3l3-1.5z"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 16 16"><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2.5M8 11.5h6"/><circle cx="10.75" cy="4.5" r="1.75"/><circle cx="6.25" cy="11.5" r="1.75"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5l7 4.5-7 4.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9"/></symbol>
+  <symbol id="i-volume" viewBox="0 0 16 16"><path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.75 3.75a6 6 0 0 1 0 8.5"/></symbol>
+  <symbol id="i-muted" viewBox="0 0 16 16"><path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="M11 6l3 4M14 6l-3 4"/></symbol>
+  <symbol id="i-fullscreen" viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3 10.5V3.5a1 1 0 0 1 1-1h6.5"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 16 16"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6l.7-8.5M6.75 7v3.5M9.25 7v3.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M4.5 6.5L8 10l3.5-3.5"/></symbol>
+</svg>
+
+<nav class="cl-nav"><div class="cl-tabs" role="tablist">
+  <button class="cl-tab" role="tab" id="tab-clips" aria-selected="true"><svg class="cl-icon"><use href="#i-film"/></svg>Clips <span class="cl-count" id="count">0</span></button>
+  <button class="cl-tab" role="tab" id="tab-settings" aria-selected="false"><svg class="cl-icon"><use href="#i-sliders"/></svg>Réglages</button>
+</div></nav>
+
+<main class="cl-body cl-body--clips" id="clips-view">
+  <div class="cl-library" id="library">
+    <div class="cl-clips" role="listbox" aria-label="Clips" id="list"></div>
+    <div class="cl-viewer">
+      <div class="cl-video" id="video">
+        <video id="player" preload="metadata"></video>
+        <span class="cl-video__play" id="big-play" hidden><svg class="cl-icon" width="28" height="28"><use href="#i-play"/></svg></span>
+        <span class="cl-video__controls">
+          <button class="cl-vbtn" id="play" aria-label="Lecture" title="Lecture (Espace)"><svg class="cl-icon"><use href="#i-play"/></svg></button>
+          <input class="cl-video__seek" id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Position">
+          <span class="cl-video__time" id="time">0:00 / 0:00</span>
+          <button class="cl-vbtn" id="mute" aria-label="Couper le son" title="Couper le son"><svg class="cl-icon"><use href="#i-volume"/></svg></button>
+          <button class="cl-vbtn" id="fullscreen" aria-label="Plein écran" title="Plein écran (F)"><svg class="cl-icon"><use href="#i-fullscreen"/></svg></button>
+        </span>
+      </div>
+      <div class="cl-viewer__info">
+        <span class="cl-viewer__title"><span class="cl-clip__title" id="v-title"></span><span class="cl-clip__file" id="v-file"></span></span>
+        <span class="cl-viewer__actions">
+          <span class="cl-toast" id="toast" role="status" hidden><svg class="cl-icon"><use href="#i-check"/></svg><span id="toast-text"></span></span>
+          <button class="cl-btn cl-btn--secondary" id="copy"><svg class="cl-icon"><use href="#i-copy"/></svg>Copier</button>
+          <button class="cl-btn cl-btn--ghost cl-btn--icon" id="rename" aria-label="Renommer" title="Renommer (F2)"><svg class="cl-icon"><use href="#i-pencil"/></svg></button>
+          <button class="cl-btn cl-btn--ghost cl-btn--icon" id="reveal" aria-label="Afficher dans le dossier" title="Afficher dans le dossier"><svg class="cl-icon"><use href="#i-folder"/></svg></button>
+          <button class="cl-btn cl-btn--ghost cl-btn--icon" id="delete" aria-label="Mettre à la corbeille" title="Mettre à la corbeille (Suppr)"><svg class="cl-icon"><use href="#i-trash"/></svg></button>
+        </span>
+      </div>
     </div>
-    <p id="clip-status" role="status"></p>
   </div>
-</section>
-<section id="settings-view" hidden>
-<form id="form">
-  <label>Résolution
-    <select name="height">
-      <option value="720">720p</option>
-      <option value="1080">1080p</option>
-      <option value="1440">1440p</option>
-    </select>
-  </label>
-  <label>Images par seconde
-    <select name="fps">
-      <option>30</option><option>60</option>
-    </select>
-  </label>
-  <label>Qualité
-    <select name="quality">
-      <option value="low">Basse</option>
-      <option value="medium">Moyenne</option>
-      <option value="high">Haute</option>
-      <option value="very_high">Très haute</option>
-    </select>
-  </label>
-  <label>Durée du clip
-    <input name="clip_seconds" type="number" min="10" max="300" step="1"> s
-  </label>
-  <p id="estimate"></p>
-  <label><input name="microphone" type="checkbox"> Micro</label>
-  <label>Quel micro
-    <select name="microphone_device"></select>
-  </label>
-  <label>Volume du micro
-    <input name="microphone_volume" type="range" min="0" max="200" step="5">
-    <output id="volume"></output> %
-  </label>
-  <label>Raccourci
-    <input name="hotkey" readonly>
-    <button id="capture" type="button">Changer…</button>
-  </label>
-  <label>Dossier des clips
-    <span id="clips-dir"></span>
-    <button id="folder" type="button">Changer…</button>
-  </label>
-  <label><input id="startup" type="checkbox"> Démarrer avec Windows</label>
+  <div class="cl-empty" id="empty" hidden><span class="cl-empty__title">Aucun clip</span><span class="cl-empty__text" id="empty-hotkey"></span></div>
+</main>
+
+<main class="cl-body" id="settings-view" hidden>
+<form id="form" onsubmit="return false">
+  <section class="cl-settings">
+    <div class="cl-setting" data-key="height"><span class="cl-setting__label"><span>Résolution</span></span>
+      <span class="cl-setting__value"><span class="cl-seg" role="radiogroup" aria-label="Résolution" data-name="height">
+        <button type="button" role="radio" value="720">720p</button><button type="button" role="radio" value="1080">1080p</button><button type="button" role="radio" value="1440">1440p</button>
+      </span></span></div>
+    <div class="cl-setting" data-key="fps"><span class="cl-setting__label"><span>Images/s</span></span>
+      <span class="cl-setting__value"><span class="cl-seg" role="radiogroup" aria-label="Images par seconde" data-name="fps">
+        <button type="button" role="radio" value="30">30</button><button type="button" role="radio" value="60">60</button>
+      </span></span></div>
+    <div class="cl-setting" data-key="quality"><span class="cl-setting__label"><span>Qualité</span></span>
+      <span class="cl-setting__value"><span class="cl-seg" role="radiogroup" aria-label="Qualité" data-name="quality">
+        <button type="button" role="radio" value="low">Basse</button><button type="button" role="radio" value="medium">Moyenne</button><button type="button" role="radio" value="high">Haute</button><button type="button" role="radio" value="very_high">Très haute</button>
+      </span></span></div>
+    <div class="cl-setting" data-key="clip_seconds"><span class="cl-setting__label"><span>Durée</span></span>
+      <span class="cl-setting__value"><span class="cl-number"><input class="cl-input" name="clip_seconds" type="number" min="10" max="300" step="1" aria-label="Durée en secondes"><span>s</span></span></span></div>
+    <div class="cl-setting"><span class="cl-setting__label"><span>Taille estimée</span></span>
+      <span class="cl-setting__value"><span class="cl-estimate"><span class="cl-estimate__mb" id="estimate"></span><span class="cl-estimate__detail" id="estimate-detail"></span></span></span></div>
+  </section>
+  <section class="cl-settings">
+    <div class="cl-setting" data-key="microphone"><span class="cl-setting__label"><span>Micro</span></span>
+      <span class="cl-setting__value"><label class="cl-switch"><input type="checkbox" role="switch" name="microphone" aria-label="Micro"><span class="cl-switch__track"></span></label></span></div>
+    <div class="cl-setting" data-key="microphone_device" data-mic><span class="cl-setting__label"><span>Périphérique</span></span>
+      <span class="cl-setting__value"><span class="cl-select"><select name="microphone_device" aria-label="Micro utilisé"></select><svg class="cl-icon"><use href="#i-chevron"/></svg></span></span></div>
+    <div class="cl-setting" data-key="microphone_volume" data-mic><span class="cl-setting__label"><span>Volume micro</span></span>
+      <span class="cl-setting__value"><span class="cl-slider"><input type="range" name="microphone_volume" min="0" max="200" step="5" aria-label="Volume micro"><output id="volume"></output></span></span></div>
+  </section>
+  <section class="cl-settings">
+    <div class="cl-setting" data-key="hotkey"><span class="cl-setting__label"><span>Raccourci</span></span>
+      <span class="cl-setting__value" id="hotkey-cell"></span></div>
+    <div class="cl-setting" data-key="output_dir"><span class="cl-setting__label"><span>Dossier</span></span>
+      <span class="cl-setting__value"><span class="cl-path" id="clips-dir"></span><button type="button" class="cl-btn cl-btn--secondary" id="folder">Changer</button></span></div>
+    <div class="cl-setting" data-key="startup"><span class="cl-setting__label"><span>Démarrer avec Windows</span></span>
+      <span class="cl-setting__value"><label class="cl-switch"><input type="checkbox" role="switch" id="startup" aria-label="Démarrer avec Windows"><span class="cl-switch__track"></span></label></span></div>
+  </section>
 </form>
-<p id="error" role="alert"></p>
-</section>
+</main>
+
+<div class="cl-scrim" id="dlg-delete" hidden><div class="cl-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlg-delete-title">
+  <span class="cl-dialog__title" id="dlg-delete-title">Supprimer ce clip ?</span>
+  <span class="cl-clip__file" id="dlg-delete-file"></span>
+  <div class="cl-dialog__actions"><button class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary" id="confirm-delete">Supprimer</button></div>
+</div></div>
+<div class="cl-scrim" id="dlg-rename" hidden><form class="cl-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-rename-title" id="rename-form">
+  <label class="cl-dialog__title" id="dlg-rename-title" for="rename-input">Renommer</label>
+  <span class="cl-field"><input class="cl-input cl-input--text" id="rename-input" spellcheck="false"><span>.mp4</span></span>
+  <div class="cl-dialog__actions"><button type="button" class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary">Renommer</button></div>
+</form></div>
+
 <script>
   const host = window.chrome.webview;
   const $ = id => document.getElementById(id);
   const form = $('form');
   const send = (command, arg) => host.postMessage(arg === undefined ? command : command + '\n' + arg);
   let capturing = false;
+  let hotkey = 'Alt+F10';
+  // Réglage modifié en dernier : une erreur renvoyée par Rust s'affiche sous lui.
+  let lastKey = null;
+
+  const kbd = text => {
+    const span = document.createElement('span');
+    span.className = 'cl-kbd';
+    text.split('+').forEach((key, i) => {
+      if (i) span.append(Object.assign(document.createElement('span'), { textContent: '+' }));
+      span.append(Object.assign(document.createElement('kbd'), { textContent: key }));
+    });
+    return span;
+  };
+  const decimal = (n, digits = 1) => Number(n).toLocaleString('fr-FR', { maximumFractionDigits: digits });
 
   // Messages de Rust : « state » (réglages, lignes clé=valeur), « clips » (une ligne
-  // nom⇥date⇥taille⇥durée par clip), « copied », « error ».
+  // nom⇥date⇥taille⇥durée par clip), « copied », « renamed », « error ».
   host.addEventListener('message', e => {
     const [kind, ...lines] = e.data.split('\n');
     if (kind === 'clips') return showClips(lines.filter(Boolean));
-    if (kind === 'copied') return status(`Copié : ${lines[0]}. Ctrl+V dans Discord pour l'envoyer.`);
+    if (kind === 'copied') return toast('Copié');
     if (kind === 'renamed') {
       reselect = lines[0];
       renaming = null;
@@ -104,9 +348,12 @@
     if (kind === 'error') {
       if (renaming) reselect = renaming;
       renaming = null;
-      return status(lines.join(' '), true);
+      return toast(lines.join(' '), true);
     }
-    if (kind !== 'state') return;
+    if (kind === 'state') showState(lines);
+  });
+
+  function showState(lines) {
     const state = Object.fromEntries(lines.map(line => {
       const i = line.indexOf('=');
       return [line.slice(0, i), line.slice(i + 1)];
@@ -114,12 +361,12 @@
     // Liste des micros avant d'y sélectionner le micro choisi.
     const mics = form.elements.microphone_device;
     mics.textContent = '';
-    mics.append(new Option('Par défaut (micro de communication de Windows)', ''));
+    mics.append(new Option('Par défaut', ''));
     const parts = (state.microphones ?? '').split('\t');
     for (let i = 0; i + 1 < parts.length; i += 2) mics.append(new Option(parts[i + 1], parts[i]));
     if (![...mics.options].some(o => o.value === state.microphone_device)) {
       // Liste indisponible : on ne sait pas s'il est branché.
-      const label = state.microphones === undefined ? 'Micro choisi' : 'Micro choisi (débranché : micro par défaut)';
+      const label = state.microphones === undefined ? 'Micro choisi' : 'Micro choisi (débranché)';
       mics.append(new Option(label, state.microphone_device));
     }
     for (const el of form.elements) {
@@ -127,29 +374,63 @@
       if (el.type === 'checkbox') el.checked = state[el.name] === 'true';
       else el.value = state[el.name];
     }
+    for (const group of document.querySelectorAll('.cl-seg')) {
+      for (const b of group.children) b.setAttribute('aria-checked', String(b.value === state[group.dataset.name]));
+    }
+    for (const row of document.querySelectorAll('[data-mic]')) row.classList.toggle('is-off', state.microphone !== 'true');
     capturing = false;
-    $('volume').value = state.microphone_volume;
+    hotkey = state.hotkey;
+    showHotkey();
+    $('empty-hotkey').replaceChildren(kbd(hotkey));
+    $('volume').value = `${state.microphone_volume} %`;
     $('clips-dir').textContent = state.clips_dir;
+    $('clips-dir').title = state.clips_dir;
     $('startup').checked = state.startup === 'true';
-    $('estimate').textContent =
-      `≈ ${state.estimate_mb} Mo par clip (${state.width}×${state.height}, ${state.bitrate_mbps} Mb/s)`;
-    $('error').textContent = state.error ?? '';
-  });
+    $('estimate').textContent = `≈ ${state.estimate_mb} Mo`;
+    $('estimate-detail').textContent = `${state.width}×${state.height} · ${decimal(state.bitrate_mbps)} Mb/s`;
+    for (const old of document.querySelectorAll('.cl-setting__error')) old.remove();
+    if (state.error) {
+      const row = document.querySelector(`[data-key="${lastKey}"]`) ?? document.querySelector('.cl-setting');
+      const error = Object.assign(document.createElement('span'), { className: 'cl-setting__error', textContent: state.error });
+      error.setAttribute('role', 'alert');
+      row.querySelector('.cl-setting__label').append(error);
+    }
+  }
 
-  form.addEventListener('submit', e => e.preventDefault());
+  function showHotkey() {
+    const cell = $('hotkey-cell');
+    if (capturing) {
+      const hint = Object.assign(document.createElement('span'), { className: 'cl-capture', textContent: 'Appuyez sur la combinaison' });
+      return cell.replaceChildren(hint, kbd('Échap'));
+    }
+    const change = Object.assign(document.createElement('button'), { type: 'button', className: 'cl-btn cl-btn--secondary', textContent: 'Modifier' });
+    change.addEventListener('click', () => {
+      capturing = true;
+      lastKey = 'hotkey';
+      send('capture');
+      showHotkey();
+    });
+    cell.replaceChildren(kbd(hotkey), change);
+  }
+
   form.addEventListener('change', e => {
     const el = e.target;
-    if (!el.name || el.name === 'hotkey') return;
+    if (!el.name) return;
+    lastKey = el.name;
     send('set', `${el.name}=${el.type === 'checkbox' ? el.checked : el.value}`);
   });
-  form.elements.microphone_volume.addEventListener('input', e => $('volume').value = e.target.value);
-  $('startup').addEventListener('change', e => send('startup', String(e.target.checked)));
-  $('folder').addEventListener('click', () => send('pick_folder'));
-  $('capture').addEventListener('click', () => {
-    capturing = true;
-    send('capture');
-    form.elements.hotkey.value = 'Appuyez sur la combinaison (Échap : annuler)';
-  });
+  for (const group of document.querySelectorAll('.cl-seg')) {
+    group.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b || b.getAttribute('aria-checked') === 'true') return;
+      for (const o of group.children) o.setAttribute('aria-checked', String(o === b));
+      lastKey = group.dataset.name;
+      send('set', `${group.dataset.name}=${b.value}`);
+    });
+  }
+  form.elements.microphone_volume.addEventListener('input', e => $('volume').value = `${e.target.value} %`);
+  $('startup').addEventListener('change', e => { lastKey = 'startup'; send('startup', String(e.target.checked)); });
+  $('folder').addEventListener('click', () => { lastKey = 'output_dir'; send('pick_folder'); });
 
   // Format accepté par `parse_hotkey` : modificateurs puis F1–F24, A–Z ou 0–9.
   // Lettres d'après `key` (AZERTY : la touche A donne VK_A), chiffres et F1–F24
@@ -190,10 +471,25 @@
   // le nouveau nom annoncé par Rust, ou l'ancien si le renommage a échoué.
   let renaming = null;
   let reselect = null;
+  let toastTimer;
 
-  function status(text, error = false) {
-    $('clip-status').textContent = text;
-    $('clip-status').classList.toggle('error', error);
+  function toast(text, error = false) {
+    $('toast-text').textContent = text;
+    $('toast').classList.toggle('is-error', error);
+    $('toast').hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $('toast').hidden = true, error ? 6000 : 2400);
+  }
+
+  function title(ms) {
+    const date = new Date(Number(ms));
+    const time = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const days = Math.round((day(new Date()) - day(date)) / 86400000);
+    if (days === 0) return `Aujourd’hui · ${time}`;
+    if (days === 1) return `Hier · ${time}`;
+    const sameYear = date.getFullYear() === new Date().getFullYear();
+    return `${date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: sameYear ? undefined : 'numeric' })} · ${time}`;
   }
 
   function showClips(lines) {
@@ -204,35 +500,27 @@
     for (const line of lines) {
       const [name, modified, size, duration] = line.split('\t');
       const row = document.createElement('div');
-      const date = new Date(Number(modified)).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
-      row.append(name);
-      const details = document.createElement('small');
-      details.textContent = `${date} · ${formatDuration(duration)} · ${(size / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`;
-      row.append(details);
+      row.className = 'cl-clip';
+      row.setAttribute('role', 'option');
+      row.tabIndex = -1;
       row.dataset.name = name;
       row.dataset.modified = modified;
+      row.dataset.title = title(modified);
+      const body = Object.assign(document.createElement('span'), { className: 'cl-clip__body' });
+      body.append(
+        Object.assign(document.createElement('span'), { className: 'cl-clip__title', textContent: row.dataset.title }),
+        Object.assign(document.createElement('span'), { className: 'cl-clip__file', textContent: name }),
+        Object.assign(document.createElement('span'), { className: 'cl-clip__meta', textContent: `${formatDuration(duration)} · ${decimal(size / 1e6)} Mo` }),
+      );
+      row.append(body);
       row.addEventListener('click', () => select(name));
-      // Le glisser HTML ne transporte pas de fichier : Rust lance un glisser natif.
-      row.addEventListener('pointerdown', down => {
-        if (down.button !== 0) return;
-        const move = m => {
-          if (Math.abs(m.clientX - down.clientX) + Math.abs(m.clientY - down.clientY) < 6) return;
-          stop();
-          send('drag', name);
-        };
-        const stop = () => {
-          removeEventListener('pointermove', move);
-          removeEventListener('pointerup', stop);
-          removeEventListener('pointercancel', stop);
-        };
-        addEventListener('pointermove', move);
-        addEventListener('pointerup', stop);
-        addEventListener('pointercancel', stop);
-      });
+      dragFrom(row, () => name);
       list.append(row);
       found ||= name === current;
     }
-    if (!lines.length) list.textContent = 'Aucun clip pour l\'instant.';
+    $('count').textContent = lines.length;
+    $('library').hidden = !lines.length;
+    $('empty').hidden = !!lines.length;
     list.scrollTop = scroll;
     if (!found) unload();
     if (reselect) {
@@ -241,6 +529,30 @@
       if ([...list.children].some(r => r.dataset.name === pick)) select(pick, false);
     }
     highlight();
+  }
+
+  // Le glisser HTML ne transporte pas de fichier : Rust lance un glisser natif.
+  // `onClick` : appelé si le bouton est relâché sans avoir bougé.
+  function dragFrom(el, name, onClick) {
+    el.addEventListener('pointerdown', down => {
+      if (down.button !== 0 || !name()) return;
+      let dragged = false;
+      const move = m => {
+        if (Math.abs(m.clientX - down.clientX) + Math.abs(m.clientY - down.clientY) < 6) return;
+        dragged = true;
+        stop();
+        send('drag', name());
+      };
+      const stop = () => {
+        removeEventListener('pointermove', move);
+        removeEventListener('pointerup', up);
+        removeEventListener('pointercancel', stop);
+      };
+      const up = () => { stop(); if (!dragged && onClick) onClick(); };
+      addEventListener('pointermove', move);
+      addEventListener('pointerup', up);
+      addEventListener('pointercancel', stop);
+    });
   }
 
   function formatDuration(seconds) {
@@ -268,48 +580,123 @@
   }
 
   function highlight() {
-    for (const row of $('list').children) row.classList?.toggle('selected', row.dataset.name === current);
-    for (const id of ['copy', 'rename', 'delete', 'reveal']) $(id).disabled = !current;
+    let selected = null;
+    for (const row of $('list').children) {
+      const on = row.dataset.name === current;
+      row.setAttribute('aria-selected', String(on));
+      row.tabIndex = on ? 0 : -1;
+      if (on) selected = row;
+    }
+    // Sans sélection, la première ligne reste joignable au clavier.
+    if (!selected && $('list').firstChild) $('list').firstChild.tabIndex = 0;
+    $('v-title').textContent = selected?.dataset.title ?? '';
+    $('v-file').textContent = current ?? '';
+    for (const id of ['copy', 'rename', 'delete', 'reveal', 'play', 'mute', 'fullscreen']) $(id).disabled = !current;
+    $('seek').disabled = !current;
+    controls();
   }
+
+  // Lecteur : barre de Clipper plutôt que celle du navigateur.
+  const icon = (button, name) => button.querySelector('use').setAttribute('href', '#i-' + name);
+  const clock = seconds => {
+    const s = Math.floor(seconds || 0);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  function controls() {
+    const playing = !player.paused && !!current;
+    icon($('play'), playing ? 'pause' : 'play');
+    $('play').setAttribute('aria-label', playing ? 'Pause' : 'Lecture');
+    $('play').title = `${playing ? 'Pause' : 'Lecture'} (Espace)`;
+    $('big-play').hidden = playing || !current;
+    icon($('mute'), player.muted ? 'muted' : 'volume');
+    $('mute').setAttribute('aria-label', player.muted ? 'Remettre le son' : 'Couper le son');
+    $('mute').title = $('mute').getAttribute('aria-label');
+    $('seek').max = player.duration || 0;
+    $('seek').value = player.currentTime || 0;
+    $('time').textContent = `${clock(player.currentTime)} / ${clock(player.duration)}`;
+  }
+  for (const event of ['play', 'pause', 'timeupdate', 'durationchange', 'volumechange', 'emptied', 'ended', 'error']) {
+    player.addEventListener(event, controls);
+  }
+  const toggle = () => { if (current) player.paused ? player.play() : player.pause(); };
+  const fullscreen = () => document.fullscreenElement ? document.exitFullscreen() : $('video').requestFullscreen();
+  $('play').addEventListener('click', toggle);
+  $('mute').addEventListener('click', () => player.muted = !player.muted);
+  $('fullscreen').addEventListener('click', fullscreen);
+  $('seek').addEventListener('input', e => player.currentTime = Number(e.target.value));
+  // Un clic sur l'image lit ou met en pause ; un glisser emporte le fichier.
+  dragFrom(player, () => current, toggle);
 
   $('copy').addEventListener('click', () => send('copy', current));
   $('reveal').addEventListener('click', () => send('reveal', current));
-  $('rename').addEventListener('click', () => {
-    const name = prompt('Nouveau nom du clip', current.replace(/\.mp4$/i, ''));
-    if (!name) return;
+  $('rename').addEventListener('click', () => open('dlg-rename'));
+  $('delete').addEventListener('click', () => open('dlg-delete'));
+
+  // Boîtes de dialogue.
+  let dialog = null;
+  function open(id) {
+    if (!current) return;
+    dialog = { el: $(id), from: document.activeElement };
+    $('dlg-delete-file').textContent = current;
+    $('rename-input').value = current.replace(/\.mp4$/i, '');
+    dialog.el.hidden = false;
+    if (id === 'dlg-rename') $('rename-input').select();
+    else dialog.el.querySelector('[data-cancel]').focus();
+  }
+  function close() {
+    if (!dialog) return;
+    dialog.el.hidden = true;
+    dialog.from?.focus?.();
+    dialog = null;
+  }
+  for (const b of document.querySelectorAll('[data-cancel]')) b.addEventListener('click', close);
+  $('confirm-delete').addEventListener('click', () => {
     const old = current;
+    close();
+    unload();
+    send('delete', old);
+  });
+  $('rename-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const name = $('rename-input').value.trim();
+    const old = current;
+    close();
+    if (!name || name === old.replace(/\.mp4$/i, '')) return;
     unload();
     renaming = old;
     send('rename', `${old}\t${name}`);
   });
-  $('delete').addEventListener('click', () => {
-    if (!confirm(`Mettre ${current} à la corbeille ?`)) return;
-    const old = current;
-    unload();
-    send('delete', old);
-  });
 
   // Un bouton cliqué à la souris rend le focus : Espace commande alors le lecteur au
   // lieu de rejouer « Copier ». Au clavier (Tab), le bouton garde Espace.
-  for (const button of document.querySelectorAll('nav button, #viewer button')) {
+  for (const button of document.querySelectorAll('.cl-tabs button, .cl-viewer button')) {
     button.addEventListener('click', e => { if (e.detail > 0) button.blur(); });
   }
 
-  // Raccourcis du lecteur : espace, flèches (±5 s), F (plein écran). Le lecteur
-  // sélectionné gère lui-même espace et flèches.
   document.addEventListener('keydown', e => {
-    if (capturing || $('clips-view').hidden || !current) return;
+    if (dialog) {
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      return;
+    }
+    if (capturing || $('clips-view').hidden) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     if (['INPUT', 'SELECT', 'BUTTON'].includes(e.target.tagName)) return;
-    const own = e.target === player;
-    if (e.code === 'Space' && !own) player.paused ? player.play() : player.pause();
-    else if (e.code === 'ArrowLeft' && !own) player.currentTime -= 5;
-    else if (e.code === 'ArrowRight' && !own) player.currentTime += 5;
-    else if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : player.requestFullscreen();
+    const row = e.target.closest?.('.cl-clip');
+    if (row && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      const next = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+      if (next) { select(next.dataset.name); next.focus(); }
+    } else if (!current) return;
+    else if (e.key === 'Delete') open('dlg-delete');
+    else if (e.key === 'F2') open('dlg-rename');
+    else if (e.code === 'Space') toggle();
+    else if (e.code === 'ArrowLeft') player.currentTime -= 5;
+    else if (e.code === 'ArrowRight') player.currentTime += 5;
+    else if (e.code === 'KeyF') fullscreen();
     else return;
     e.preventDefault();
   });
 
+  showHotkey();
   send('get');
   send('clips');
 </script>
