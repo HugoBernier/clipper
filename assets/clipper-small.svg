@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
-  <!-- Icône Clipper pour 16 à 24 px : sans anneau extérieur, arc un peu plus épais, point rouge plus gros. Même centre et même ouverture que clipper.svg. -->
+  <!-- Icône Clipper pour 16 à 24 px : sans anneau extérieur, arc un peu plus épais, point rouge plus gros. Même centre et même ouverture que clipper.svg ; pointe à 9 du point rouge (10 sur la grande). -->
   <rect x="8" y="8" width="240" height="240" rx="56" fill="#2A2A31"/>
-  <path d="M 71.62 107.48 A 60 60 0 1 0 112.34 70.08" fill="none" stroke="#F4F4F5" stroke-width="22" stroke-linecap="round"/>
-  <path d="M 75.53 83.25 L 98.93 48.13 L 116.03 95.11 Z" fill="#F4F4F5" stroke="#F4F4F5" stroke-width="3" stroke-linejoin="round"/>
-  <circle cx="128" cy="128" r="36" fill="#E53935"/>
+  <path d="M 67.86 106.11 A 64 64 0 1 0 110.97 66.31" fill="none" stroke="#F4F4F5" stroke-width="22" stroke-linecap="round"/>
+  <path d="M 74.16 79.49 L 98.93 48.13 L 113.29 87.59 Z" fill="#F4F4F5" stroke="#F4F4F5" stroke-width="3" stroke-linejoin="round"/>
+  <circle cx="128" cy="128" r="34" fill="#E53935"/>
 </svg>
