@@ -2,100 +2,168 @@
 <html lang="fr">
 <meta charset="utf-8">
 <title>Clipper</title>
-<!-- Visuel brut : le design system viendra à l'itération 11. -->
+<!-- ui.rs remplace le repère ci-dessous par docs/design-system (tokens.css puis
+     components/bundle.css) : la page est chargée par NavigateToString, sans fichier à côté. -->
 <style>
-  body { font: 14px system-ui; margin: 0; height: 100vh; display: flex; flex-direction: column; }
-  nav { display: flex; gap: 8px; padding: 8px 16px; border-bottom: 1px solid #8884; }
-  nav button[aria-selected="true"] { font-weight: bold; }
-  section { flex: 1; min-height: 0; }
-  #clips-view { display: flex; }
-  #clips-view[hidden], #settings-view[hidden] { display: none; }
-  #list { width: 340px; overflow: auto; border-right: 1px solid #8884; }
-  #list div { padding: 6px 12px; cursor: pointer; user-select: none; }
-  #list div.selected { background: #8883; }
-  #list small { display: block; opacity: .7; }
-  #viewer { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; padding: 12px; }
-  video { flex: 1; min-height: 0; width: 100%; background: #000; }
-  #settings-view { overflow: auto; padding: 0 16px; max-width: 560px; }
-  label { display: block; margin: 12px 0; }
-  #error, #clip-status.error { color: #c00; }
+/* design-system */
+
+/* Mise en page de la fenêtre (propre à ui.html). */
+html, body { height: 100%; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+.cl-thumb canvas { width: 100%; height: 100%; display: block; }
+.cl-body { flex: 1; min-height: 0; }
+.cl-body--clips { height: auto; overflow: hidden; }
+.cl-clips { min-height: 0; }
+.cl-viewer { min-height: 0; }
+.cl-video { aspect-ratio: auto; flex: 1; min-height: 0; cursor: grab; }
+.cl-video video { object-fit: contain; }
+.cl-video:fullscreen { border-radius: 0; }
+.cl-video:fullscreen video { height: 100%; }
+.cl-video__play { position: absolute; pointer-events: none; }
+.cl-viewer__info { flex: none; }
+.cl-header__end { display: flex; align-items: center; gap: var(--space-2); }
+.cl-library > .cl-empty { flex: 1; justify-content: center; }
+.cl-setting.is-off .cl-setting__value { opacity: .45; pointer-events: none; }
+#form { display: flex; flex-direction: column; gap: var(--space-4); }
 </style>
-<nav>
-  <button id="tab-clips" aria-selected="true">Clips</button>
-  <button id="tab-settings" aria-selected="false">Réglages</button>
-</nav>
-<section id="clips-view">
-  <div id="list"></div>
-  <div id="viewer">
-    <video id="player" controls></video>
-    <div>
-      <button id="copy" disabled>Copier</button>
-      <button id="rename" disabled>Renommer…</button>
-      <button id="delete" disabled>Supprimer</button>
-      <button id="reveal" disabled>Montrer dans l'Explorateur</button>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-film" viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9" rx="1.5"/><path d="M6.5 6.5v3l3-1.5z"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 16 16"><path d="M2 4.5h7M12.5 4.5H14M2 11.5h2.5M8 11.5h6"/><circle cx="10.75" cy="4.5" r="1.75"/><circle cx="6.25" cy="11.5" r="1.75"/></symbol>
+  <symbol id="i-play" viewBox="0 0 16 16"><path d="M5 3.5l7 4.5-7 4.5z"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 16 16"><path d="M5.5 3.5v9M10.5 3.5v9"/></symbol>
+  <symbol id="i-volume" viewBox="0 0 16 16"><path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="M11 5.5a3.5 3.5 0 0 1 0 5M12.75 3.75a6 6 0 0 1 0 8.5"/></symbol>
+  <symbol id="i-muted" viewBox="0 0 16 16"><path d="M2.5 6h2.5l3.5-3v10L5 10H2.5z"/><path d="M11 6l3 4M14 6l-3 4"/></symbol>
+  <symbol id="i-fullscreen" viewBox="0 0 16 16"><path d="M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M3 10.5V3.5a1 1 0 0 1 1-1h6.5"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 16 16"><path d="M10.5 2.5l3 3L6 13H3v-3z"/><path d="M9 4l3 3"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16"><path d="M2 4.5h4l1.5 1.5H14v6.5H2z"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 16 16"><path d="M2.5 4.5h11M6 4.5V3h4v1.5M4 4.5l.7 8.5h6.6l.7-8.5M6.75 7v3.5M9.25 7v3.5"/></symbol>
+  <symbol id="i-check" viewBox="0 0 16 16"><path d="M3 8.5l3 3 7-7"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M4.5 6.5L8 10l3.5-3.5"/></symbol>
+</svg>
+
+<header class="cl-header">
+  <div class="cl-status"><span class="cl-dot" aria-hidden="true"></span><span class="cl-status__text"><span class="cl-status__title">Enregistrement</span><span class="cl-status__sub" id="status-sub"></span></span></div>
+  <span class="cl-header__end">
+    <span class="cl-toast is-error" id="alert" role="alert" hidden></span>
+    <button class="cl-btn cl-btn--secondary" id="open-folder"><svg class="cl-icon"><use href="#i-folder"/></svg>Ouvrir le dossier</button>
+  </span>
+</header>
+<nav class="cl-nav"><div class="cl-tabs" role="tablist">
+  <button class="cl-tab" role="tab" id="tab-clips" aria-selected="true"><svg class="cl-icon"><use href="#i-film"/></svg>Clips <span class="cl-count" id="count">0</span></button>
+  <button class="cl-tab" role="tab" id="tab-settings" aria-selected="false"><svg class="cl-icon"><use href="#i-sliders"/></svg>Réglages</button>
+</div></nav>
+
+<main class="cl-body cl-body--clips" id="clips-view">
+  <div class="cl-library" id="library">
+    <div class="cl-clips" role="listbox" aria-label="Clips" id="list"></div>
+    <div class="cl-viewer">
+      <div class="cl-video" id="video">
+        <video id="player" preload="metadata"></video>
+        <span class="cl-video__play" id="big-play" hidden><svg class="cl-icon" width="28" height="28"><use href="#i-play"/></svg></span>
+        <span class="cl-video__controls">
+          <button class="cl-vbtn" id="play" aria-label="Lecture" title="Lecture (Espace)"><svg class="cl-icon"><use href="#i-play"/></svg></button>
+          <input class="cl-video__seek" id="seek" type="range" min="0" max="0" step="0.01" value="0" aria-label="Position">
+          <span class="cl-video__time" id="time">0:00 / 0:00</span>
+          <button class="cl-vbtn" id="mute" aria-label="Couper le son" title="Couper le son"><svg class="cl-icon"><use href="#i-volume"/></svg></button>
+          <button class="cl-vbtn" id="fullscreen" aria-label="Plein écran" title="Plein écran (F)"><svg class="cl-icon"><use href="#i-fullscreen"/></svg></button>
+        </span>
+      </div>
+      <div class="cl-viewer__info">
+        <span class="cl-viewer__title"><span class="cl-clip__title" id="v-title"></span><span class="cl-clip__file" id="v-file"></span></span>
+        <span class="cl-viewer__actions">
+          <span class="cl-toast" id="toast" role="status" hidden><svg class="cl-icon"><use href="#i-check"/></svg><span id="toast-text"></span></span>
+          <button class="cl-btn cl-btn--secondary" id="copy"><svg class="cl-icon"><use href="#i-copy"/></svg>Copier</button>
+          <button class="cl-btn cl-btn--ghost cl-btn--icon" id="rename" aria-label="Renommer" title="Renommer (F2)"><svg class="cl-icon"><use href="#i-pencil"/></svg></button>
+          <button class="cl-btn cl-btn--ghost cl-btn--icon" id="reveal" aria-label="Afficher dans le dossier" title="Afficher dans le dossier"><svg class="cl-icon"><use href="#i-folder"/></svg></button>
+          <button class="cl-btn cl-btn--ghost cl-btn--icon" id="delete" aria-label="Mettre à la corbeille" title="Mettre à la corbeille (Suppr)"><svg class="cl-icon"><use href="#i-trash"/></svg></button>
+        </span>
+      </div>
     </div>
-    <p id="clip-status" role="status"></p>
   </div>
-</section>
-<section id="settings-view" hidden>
-<form id="form">
-  <label>Résolution
-    <select name="height">
-      <option value="720">720p</option>
-      <option value="1080">1080p</option>
-      <option value="1440">1440p</option>
-    </select>
-  </label>
-  <label>Images par seconde
-    <select name="fps">
-      <option>30</option><option>60</option>
-    </select>
-  </label>
-  <label>Qualité
-    <select name="quality">
-      <option value="low">Basse</option>
-      <option value="medium">Moyenne</option>
-      <option value="high">Haute</option>
-      <option value="very_high">Très haute</option>
-    </select>
-  </label>
-  <label>Durée du clip
-    <input name="clip_seconds" type="number" min="10" max="300" step="1"> s
-  </label>
-  <p id="estimate"></p>
-  <label><input name="microphone" type="checkbox"> Micro</label>
-  <label>Quel micro
-    <select name="microphone_device"></select>
-  </label>
-  <label>Volume du micro
-    <input name="microphone_volume" type="range" min="0" max="200" step="5">
-    <output id="volume"></output> %
-  </label>
-  <label>Raccourci
-    <input name="hotkey" readonly>
-    <button id="capture" type="button">Changer…</button>
-  </label>
-  <label>Dossier des clips
-    <span id="clips-dir"></span>
-    <button id="folder" type="button">Changer…</button>
-  </label>
-  <label><input id="startup" type="checkbox"> Démarrer avec Windows</label>
+  <div class="cl-empty" id="empty" hidden><span class="cl-empty__title">Aucun clip</span><span class="cl-empty__text" id="empty-hotkey"></span></div>
+</main>
+
+<main class="cl-body" id="settings-view" hidden>
+<form id="form" onsubmit="return false">
+  <section class="cl-settings">
+    <div class="cl-setting" data-key="height"><span class="cl-setting__label"><span>Résolution</span></span>
+      <span class="cl-setting__value"><span class="cl-seg" role="radiogroup" aria-label="Résolution" data-name="height">
+        <button type="button" role="radio" value="720">720p</button><button type="button" role="radio" value="1080">1080p</button><button type="button" role="radio" value="1440">1440p</button>
+      </span></span></div>
+    <div class="cl-setting" data-key="fps"><span class="cl-setting__label"><span>Images/s</span></span>
+      <span class="cl-setting__value"><span class="cl-seg" role="radiogroup" aria-label="Images par seconde" data-name="fps">
+        <button type="button" role="radio" value="30">30</button><button type="button" role="radio" value="60">60</button>
+      </span></span></div>
+    <div class="cl-setting" data-key="quality"><span class="cl-setting__label"><span>Qualité</span></span>
+      <span class="cl-setting__value"><span class="cl-seg" role="radiogroup" aria-label="Qualité" data-name="quality">
+        <button type="button" role="radio" value="low">Basse</button><button type="button" role="radio" value="medium">Moyenne</button><button type="button" role="radio" value="high">Haute</button><button type="button" role="radio" value="very_high">Très haute</button>
+      </span></span></div>
+    <div class="cl-setting" data-key="clip_seconds"><span class="cl-setting__label"><span>Durée</span></span>
+      <span class="cl-setting__value"><span class="cl-number"><input class="cl-input" name="clip_seconds" type="number" min="10" max="300" step="1" aria-label="Durée en secondes"><span>s</span></span></span></div>
+    <div class="cl-setting"><span class="cl-setting__label"><span>Taille estimée</span></span>
+      <span class="cl-setting__value"><span class="cl-estimate"><span class="cl-estimate__mb" id="estimate"></span><span class="cl-estimate__detail" id="estimate-detail"></span></span></span></div>
+  </section>
+  <section class="cl-settings">
+    <div class="cl-setting" data-key="microphone"><span class="cl-setting__label"><span>Micro</span></span>
+      <span class="cl-setting__value"><label class="cl-switch"><input type="checkbox" role="switch" name="microphone" aria-label="Micro"><span class="cl-switch__track"></span></label></span></div>
+    <div class="cl-setting" data-key="microphone_device" data-mic><span class="cl-setting__label"><span>Périphérique</span></span>
+      <span class="cl-setting__value"><div class="cl-dropdown" id="mic">
+        <button type="button" class="cl-dropdown__button" aria-haspopup="listbox" aria-expanded="false" aria-label="Micro utilisé"><span class="cl-dropdown__value"></span><svg class="cl-icon"><use href="#i-chevron"/></svg></button>
+        <div class="cl-dropdown__menu" role="listbox" aria-label="Micro utilisé" hidden></div>
+      </div></span></div>
+    <div class="cl-setting" data-key="microphone_volume" data-mic><span class="cl-setting__label"><span>Volume micro</span></span>
+      <span class="cl-setting__value"><span class="cl-slider"><input type="range" name="microphone_volume" min="0" max="200" step="5" aria-label="Volume micro"><output id="volume"></output></span></span></div>
+  </section>
+  <section class="cl-settings">
+    <div class="cl-setting" data-key="hotkey"><span class="cl-setting__label"><span>Raccourci</span></span>
+      <span class="cl-setting__value" id="hotkey-cell"></span></div>
+    <div class="cl-setting" data-key="output_dir"><span class="cl-setting__label"><span>Dossier</span></span>
+      <span class="cl-setting__value"><span class="cl-path" id="clips-dir"></span><button type="button" class="cl-btn cl-btn--secondary" id="folder">Changer</button></span></div>
+    <div class="cl-setting" data-key="startup"><span class="cl-setting__label"><span>Démarrer avec Windows</span></span>
+      <span class="cl-setting__value"><label class="cl-switch"><input type="checkbox" role="switch" id="startup" aria-label="Démarrer avec Windows"><span class="cl-switch__track"></span></label></span></div>
+  </section>
 </form>
-<p id="error" role="alert"></p>
-</section>
+</main>
+
+<div class="cl-scrim" id="dlg-delete" hidden><div class="cl-dialog" role="alertdialog" aria-modal="true" aria-labelledby="dlg-delete-title">
+  <span class="cl-dialog__title" id="dlg-delete-title">Supprimer ce clip ?</span>
+  <span class="cl-clip__file" id="dlg-delete-file"></span>
+  <div class="cl-dialog__actions"><button class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary" id="confirm-delete">Supprimer</button></div>
+</div></div>
+<div class="cl-scrim" id="dlg-rename" hidden><form class="cl-dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-rename-title" id="rename-form">
+  <label class="cl-dialog__title" id="dlg-rename-title" for="rename-input">Renommer</label>
+  <span class="cl-field"><input class="cl-input cl-input--text" id="rename-input" spellcheck="false"><span>.mp4</span></span>
+  <div class="cl-dialog__actions"><button type="button" class="cl-btn cl-btn--secondary" data-cancel>Annuler</button><button class="cl-btn cl-btn--primary">Renommer</button></div>
+</form></div>
+
 <script>
   const host = window.chrome.webview;
   const $ = id => document.getElementById(id);
   const form = $('form');
   const send = (command, arg) => host.postMessage(arg === undefined ? command : command + '\n' + arg);
   let capturing = false;
+  let hotkey = 'Alt+F10';
+  // Réglage modifié en dernier : une erreur renvoyée par Rust s'affiche sous lui.
+  let lastKey = null;
+
+  const kbd = text => {
+    const span = document.createElement('span');
+    span.className = 'cl-kbd';
+    text.split('+').forEach((key, i) => {
+      if (i) span.append(Object.assign(document.createElement('span'), { textContent: '+' }));
+      span.append(Object.assign(document.createElement('kbd'), { textContent: key }));
+    });
+    return span;
+  };
+  const decimal = (n, digits = 1) => Number(n).toLocaleString('fr-FR', { maximumFractionDigits: digits });
 
   // Messages de Rust : « state » (réglages, lignes clé=valeur), « clips » (une ligne
-  // nom⇥date⇥taille⇥durée par clip), « copied », « error ».
+  // nom⇥date⇥taille⇥durée par clip), « copied », « renamed », « error ».
   host.addEventListener('message', e => {
     const [kind, ...lines] = e.data.split('\n');
     if (kind === 'clips') return showClips(lines.filter(Boolean));
-    if (kind === 'copied') return status(`Copié : ${lines[0]}. Ctrl+V dans Discord pour l'envoyer.`);
+    if (kind === 'copied') return toast('Copié');
     if (kind === 'renamed') {
       reselect = lines[0];
       renaming = null;
@@ -104,52 +172,148 @@
     if (kind === 'error') {
       if (renaming) reselect = renaming;
       renaming = null;
-      return status(lines.join(' '), true);
+      return alert(lines.join(' '));
     }
-    if (kind !== 'state') return;
+    if (kind === 'state') showState(lines);
+  });
+
+  function showState(lines) {
     const state = Object.fromEntries(lines.map(line => {
       const i = line.indexOf('=');
       return [line.slice(0, i), line.slice(i + 1)];
     }));
-    // Liste des micros avant d'y sélectionner le micro choisi.
-    const mics = form.elements.microphone_device;
-    mics.textContent = '';
-    mics.append(new Option('Par défaut (micro de communication de Windows)', ''));
+    // Liste des micros, puis le micro choisi.
+    const mics = [['', 'Par défaut']];
     const parts = (state.microphones ?? '').split('\t');
-    for (let i = 0; i + 1 < parts.length; i += 2) mics.append(new Option(parts[i + 1], parts[i]));
-    if (![...mics.options].some(o => o.value === state.microphone_device)) {
-      // Liste indisponible : on ne sait pas s'il est branché.
-      const label = state.microphones === undefined ? 'Micro choisi' : 'Micro choisi (débranché : micro par défaut)';
-      mics.append(new Option(label, state.microphone_device));
-    }
+    for (let i = 0; i + 1 < parts.length; i += 2) mics.push([parts[i], parts[i + 1]]);
+    // Un micro choisi mais débranché n'est pas listé : Clipper enregistre alors le micro
+    // par défaut, qui s'affiche choisi.
+    const chosen = mics.some(([id]) => id === state.microphone_device) ? state.microphone_device : '';
+    showMics(mics, chosen);
+    const off = state.microphone !== 'true';
+    micButton.disabled = off;
+    form.elements.microphone_volume.disabled = off;
     for (const el of form.elements) {
       if (!(el.name in state)) continue;
       if (el.type === 'checkbox') el.checked = state[el.name] === 'true';
       else el.value = state[el.name];
     }
+    for (const group of document.querySelectorAll('.cl-seg')) {
+      for (const b of group.children) b.setAttribute('aria-checked', String(b.value === state[group.dataset.name]));
+    }
+    for (const row of document.querySelectorAll('[data-mic]')) row.classList.toggle('is-off', state.microphone !== 'true');
     capturing = false;
-    $('volume').value = state.microphone_volume;
+    hotkey = state.hotkey;
+    showHotkey();
+    const seconds = Object.assign(document.createElement('span'), { textContent: `sauvegarde les ${state.clip_seconds} dernières secondes` });
+    $('status-sub').replaceChildren(kbd(hotkey), seconds);
+    newSince = Number(state.new_since) || 0;
+    for (const row of $('list').children) row.classList.toggle('cl-clip--new', isNew(row));
+    $('empty-hotkey').replaceChildren(kbd(hotkey));
+    $('volume').value = `${state.microphone_volume} %`;
     $('clips-dir').textContent = state.clips_dir;
+    $('clips-dir').title = state.clips_dir;
     $('startup').checked = state.startup === 'true';
-    $('estimate').textContent =
-      `≈ ${state.estimate_mb} Mo par clip (${state.width}×${state.height}, ${state.bitrate_mbps} Mb/s)`;
-    $('error').textContent = state.error ?? '';
+    $('estimate').textContent = `≈ ${state.estimate_mb} Mo`;
+    $('estimate-detail').textContent = `${state.width}×${state.height} · ${decimal(state.bitrate_mbps)} Mb/s`;
+    for (const old of document.querySelectorAll('.cl-setting__error')) old.remove();
+    if (state.error) {
+      const row = document.querySelector(`[data-key="${lastKey}"]`) ?? document.querySelector('.cl-setting');
+      const error = Object.assign(document.createElement('span'), { className: 'cl-setting__error', textContent: state.error });
+      error.setAttribute('role', 'alert');
+      row.querySelector('.cl-setting__label').append(error);
+    }
+  }
+
+  // Périphérique : liste dessinée par le design system (Dropdown), pas un <select>.
+  const mic = $('mic');
+  const micButton = mic.querySelector('.cl-dropdown__button');
+  const micMenu = mic.querySelector('.cl-dropdown__menu');
+  function showMics(mics, chosen) {
+    micMenu.replaceChildren(...mics.map(([id, name]) => {
+      const option = Object.assign(document.createElement('div'), { className: 'cl-dropdown__option' });
+      option.setAttribute('role', 'option');
+      option.setAttribute('aria-selected', String(id === chosen));
+      option.dataset.value = id;
+      option.innerHTML = '<svg class="cl-icon"><use href="#i-check"/></svg>';
+      option.append(Object.assign(document.createElement('span'), { textContent: name }));
+      return option;
+    }));
+    mic.querySelector('.cl-dropdown__value').textContent = mics.find(([id]) => id === chosen)?.[1] ?? '';
+  }
+  // `refocus` : rendre le focus au bouton (clavier, choix), pas après un clic ailleurs.
+  function micOpen(open, refocus = true) {
+    micButton.setAttribute('aria-expanded', String(open));
+    micMenu.hidden = !open;
+    for (const o of micMenu.children) o.classList.toggle('is-active', open && o.getAttribute('aria-selected') === 'true');
+    if (!open && refocus) micButton.focus();
+  }
+  function micPick(option) {
+    micOpen(false);
+    if (option.getAttribute('aria-selected') === 'true') return;
+    lastKey = 'microphone_device';
+    send('set', `microphone_device=${option.dataset.value}`);
+  }
+  micButton.addEventListener('click', () => micOpen(micMenu.hidden));
+  micMenu.addEventListener('click', e => {
+    const option = e.target.closest('.cl-dropdown__option');
+    if (option) micPick(option);
+  });
+  document.addEventListener('click', e => { if (!micMenu.hidden && !mic.contains(e.target)) micOpen(false, false); });
+  mic.addEventListener('keydown', e => {
+    const options = [...micMenu.children];
+    const active = options.findIndex(o => o.classList.contains('is-active'));
+    if (micMenu.hidden) {
+      if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(e.key)) { e.preventDefault(); micOpen(true); }
+      return;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); micOpen(false); }
+    else if (e.key === 'Tab') micOpen(false, false);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = Math.max(0, Math.min(options.length - 1, active + (e.key === 'ArrowDown' ? 1 : -1)));
+      options.forEach((o, i) => o.classList.toggle('is-active', i === next));
+      options[next].scrollIntoView({ block: 'nearest' });
+    } else if ((e.key === 'Enter' || e.key === ' ') && active >= 0) {
+      e.preventDefault();
+      micPick(options[active]);
+    }
   });
 
-  form.addEventListener('submit', e => e.preventDefault());
+  function showHotkey() {
+    const cell = $('hotkey-cell');
+    if (capturing) {
+      const hint = Object.assign(document.createElement('span'), { className: 'cl-capture', textContent: 'Appuyez sur la combinaison' });
+      return cell.replaceChildren(hint, kbd('Échap'));
+    }
+    const change = Object.assign(document.createElement('button'), { type: 'button', className: 'cl-btn cl-btn--secondary', textContent: 'Modifier' });
+    change.addEventListener('click', () => {
+      capturing = true;
+      lastKey = 'hotkey';
+      send('capture');
+      showHotkey();
+    });
+    cell.replaceChildren(kbd(hotkey), change);
+  }
+
   form.addEventListener('change', e => {
     const el = e.target;
-    if (!el.name || el.name === 'hotkey') return;
+    if (!el.name) return;
+    lastKey = el.name;
     send('set', `${el.name}=${el.type === 'checkbox' ? el.checked : el.value}`);
   });
-  form.elements.microphone_volume.addEventListener('input', e => $('volume').value = e.target.value);
-  $('startup').addEventListener('change', e => send('startup', String(e.target.checked)));
-  $('folder').addEventListener('click', () => send('pick_folder'));
-  $('capture').addEventListener('click', () => {
-    capturing = true;
-    send('capture');
-    form.elements.hotkey.value = 'Appuyez sur la combinaison (Échap : annuler)';
-  });
+  for (const group of document.querySelectorAll('.cl-seg')) {
+    group.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b || b.getAttribute('aria-checked') === 'true') return;
+      for (const o of group.children) o.setAttribute('aria-checked', String(o === b));
+      lastKey = group.dataset.name;
+      send('set', `${group.dataset.name}=${b.value}`);
+    });
+  }
+  form.elements.microphone_volume.addEventListener('input', e => $('volume').value = `${e.target.value} %`);
+  $('startup').addEventListener('change', e => { lastKey = 'startup'; send('startup', String(e.target.checked)); });
+  $('folder').addEventListener('click', () => { lastKey = 'output_dir'; send('pick_folder'); });
 
   // Format accepté par `parse_hotkey` : modificateurs puis F1–F24, A–Z ou 0–9.
   // Lettres d'après `key` (AZERTY : la touche A donne VK_A), chiffres et F1–F24
@@ -183,56 +347,85 @@
     });
   }
 
+  $('open-folder').addEventListener('click', () => send('open_folder'));
+
   // Bibliothèque.
   const player = $('player');
+  // Clips modifiés après cet instant (ms) : « Nouveau » (fixé par Rust).
+  let newSince = 0;
+  const isNew = row => newSince > 0 && Number(row.dataset.modified) > newSince;
   let current = null;
   // Renommage en cours (ancien nom), puis clip à resélectionner à la liste suivante :
   // le nouveau nom annoncé par Rust, ou l'ancien si le renommage a échoué.
   let renaming = null;
   let reselect = null;
+  let toastTimer;
 
-  function status(text, error = false) {
-    $('clip-status').textContent = text;
-    $('clip-status').classList.toggle('error', error);
+  let alertTimer;
+
+  function toast(text) {
+    $('toast-text').textContent = text;
+    $('toast').hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $('toast').hidden = true, 2400);
+  }
+
+  // Erreur d'une action : dans l'en-tête, visible quel que soit l'onglet.
+  function alert(text) {
+    $('alert').textContent = text;
+    $('alert').hidden = false;
+    clearTimeout(alertTimer);
+    alertTimer = setTimeout(() => $('alert').hidden = true, 6000);
+  }
+
+  function title(ms) {
+    const date = new Date(Number(ms));
+    const time = date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const day = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const days = Math.round((day(new Date()) - day(date)) / 86400000);
+    if (days === 0) return `Aujourd’hui · ${time}`;
+    if (days === 1) return `Hier · ${time}`;
+    const sameYear = date.getFullYear() === new Date().getFullYear();
+    return `${date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: sameYear ? undefined : 'numeric' })} · ${time}`;
   }
 
   function showClips(lines) {
     const list = $('list');
     const scroll = list.scrollTop;
     list.textContent = '';
+    // Les anciennes lignes ne sont plus observées ni en attente de vignette.
+    seen.disconnect();
+    queue = [];
     let found = false;
     for (const line of lines) {
-      const [name, modified, size, duration] = line.split('\t');
+      const [name, modified, size, duration, height, fps] = line.split('\t');
       const row = document.createElement('div');
-      const date = new Date(Number(modified)).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
-      row.append(name);
-      const details = document.createElement('small');
-      details.textContent = `${date} · ${formatDuration(duration)} · ${(size / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`;
-      row.append(details);
+      row.className = 'cl-clip';
+      row.setAttribute('role', 'option');
+      row.tabIndex = -1;
       row.dataset.name = name;
       row.dataset.modified = modified;
+      row.dataset.title = title(modified);
+      if (duration) row.dataset.readable = '1';
+      const body = Object.assign(document.createElement('span'), { className: 'cl-clip__body' });
+      body.append(
+        Object.assign(document.createElement('span'), { className: 'cl-clip__title', textContent: row.dataset.title }),
+        Object.assign(document.createElement('span'), { className: 'cl-clip__file', textContent: name }),
+        Object.assign(document.createElement('span'), { className: 'cl-clip__meta', textContent: `${decimal(size / 1e6)} Mo` + (height ? ` · ${height}p · ${fps} i/s` : '') }),
+      );
+      row.classList.toggle('cl-clip--new', isNew(row));
+      row.append(thumbnail(row, formatDuration(duration)), body);
       row.addEventListener('click', () => select(name));
-      // Le glisser HTML ne transporte pas de fichier : Rust lance un glisser natif.
-      row.addEventListener('pointerdown', down => {
-        if (down.button !== 0) return;
-        const move = m => {
-          if (Math.abs(m.clientX - down.clientX) + Math.abs(m.clientY - down.clientY) < 6) return;
-          stop();
-          send('drag', name);
-        };
-        const stop = () => {
-          removeEventListener('pointermove', move);
-          removeEventListener('pointerup', stop);
-          removeEventListener('pointercancel', stop);
-        };
-        addEventListener('pointermove', move);
-        addEventListener('pointerup', stop);
-        addEventListener('pointercancel', stop);
-      });
+      dragFrom(row, () => name);
       list.append(row);
       found ||= name === current;
     }
-    if (!lines.length) list.textContent = 'Aucun clip pour l\'instant.';
+    // Vignettes des clips disparus (supprimés, renommés) : libérées.
+    const keys = new Set([...list.children].map(thumbKey));
+    for (const key of thumbs.keys()) if (!keys.has(key)) thumbs.delete(key);
+    $('count').textContent = lines.length;
+    $('library').hidden = !lines.length;
+    $('empty').hidden = !!lines.length;
     list.scrollTop = scroll;
     if (!found) unload();
     if (reselect) {
@@ -243,17 +436,112 @@
     highlight();
   }
 
+  // Vignettes : un lecteur caché prend l'image à 1 s de chaque clip visible, un clip à
+  // la fois, et la garde pour les listes suivantes (clé : nom et date). Un clip dont Rust
+  // n'a pas lu la durée (OneDrive « en ligne uniquement », fichier illisible) n'en a pas :
+  // le lire le téléchargerait.
+  const thumbs = new Map();
+  const failed = new Set();
+  let queue = [];
+  let grabbing = null;
+  let grabTimer;
+  const grabber = Object.assign(document.createElement('video'), { muted: true, preload: 'auto' });
+  const thumbKey = row => `${row.dataset.name}\t${row.dataset.modified}`;
+  const seen = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      seen.unobserve(entry.target);
+      queue.push(entry.target);
+    }
+    grabNext();
+  }, { root: $('list') });
+
+  function thumbnail(row, duration) {
+    const box = Object.assign(document.createElement('span'), { className: 'cl-thumb' });
+    const canvas = thumbs.get(thumbKey(row)) ?? Object.assign(document.createElement('canvas'), { width: 192, height: 108 });
+    box.append(canvas, Object.assign(document.createElement('span'), { className: 'cl-thumb__chip', textContent: duration }));
+    if (!thumbs.has(thumbKey(row)) && row.dataset.readable) seen.observe(row);
+    return box;
+  }
+
+  function grabNext() {
+    while (!grabbing && queue.length) {
+      const row = queue.shift();
+      if (!row.isConnected || thumbs.has(thumbKey(row)) || failed.has(thumbKey(row))) continue;
+      grabbing = row;
+      grabber.src = clipUrl(row.dataset.name, row.dataset.modified);
+      // Un chargement qui ne finit pas ne bloque pas les vignettes suivantes.
+      grabTimer = setTimeout(grabFailed, 8000);
+    }
+  }
+  function grabFailed() {
+    if (!grabbing) return;
+    failed.add(thumbKey(grabbing));
+    grabDone();
+  }
+  function grabDone() {
+    clearTimeout(grabTimer);
+    grabbing = null;
+    grabber.removeAttribute('src');
+    grabber.load();
+    grabNext();
+  }
+  grabber.addEventListener('loadedmetadata', () => grabber.currentTime = Math.min(1, (grabber.duration || 0) / 2));
+  grabber.addEventListener('seeked', () => {
+    const row = grabbing;
+    if (!row) return;
+    const canvas = row.querySelector('canvas');
+    // Recadré au centre en 16:9 (un écran ultra-large garde le milieu de l'image).
+    const w = grabber.videoWidth, h = grabber.videoHeight;
+    const sw = Math.min(w, h * 16 / 9), sh = sw * 9 / 16;
+    canvas.getContext('2d').drawImage(grabber, (w - sw) / 2, (h - sh) / 2, sw, sh, 0, 0, canvas.width, canvas.height);
+    thumbs.set(thumbKey(row), canvas);
+    grabDone();
+  });
+  grabber.addEventListener('error', grabFailed);
+  // Lâche un clip avant de le renommer ou de le supprimer.
+  function release(name) {
+    queue = queue.filter(row => row.dataset.name !== name);
+    if (grabbing?.dataset.name === name) grabDone();
+  }
+
+  // Le glisser HTML ne transporte pas de fichier : Rust lance un glisser natif.
+  // `onClick` : appelé si le bouton est relâché sans avoir bougé.
+  function dragFrom(el, name, onClick) {
+    el.addEventListener('pointerdown', down => {
+      if (down.button !== 0 || !name()) return;
+      let dragged = false;
+      const move = m => {
+        if (Math.abs(m.clientX - down.clientX) + Math.abs(m.clientY - down.clientY) < 6) return;
+        dragged = true;
+        stop();
+        send('drag', name());
+      };
+      const stop = () => {
+        removeEventListener('pointermove', move);
+        removeEventListener('pointerup', up);
+        removeEventListener('pointercancel', stop);
+      };
+      const up = () => { stop(); if (!dragged && onClick) onClick(); };
+      addEventListener('pointermove', move);
+      addEventListener('pointerup', up);
+      addEventListener('pointercancel', stop);
+    });
+  }
+
   function formatDuration(seconds) {
     if (!seconds) return '?';
     const s = Math.round(Number(seconds));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  // `v` : un clip renommé puis remplacé sous le même nom n'est pas lu depuis le cache.
+  const clipUrl = (name, modified) => `https://clips.clipper/${encodeURIComponent(name)}?v=${modified ?? ''}`;
+
   function select(name, play = true) {
     current = name;
     const row = [...$('list').children].find(r => r.dataset.name === name);
-    // `v` : un clip renommé puis remplacé sous le même nom n'est pas lu depuis le cache.
-    player.src = `https://clips.clipper/${encodeURIComponent(name)}?v=${row?.dataset.modified ?? ''}`;
+    player.src = clipUrl(name, row?.dataset.modified);
     if (play) player.play().catch(() => {});
     highlight();
   }
@@ -268,48 +556,125 @@
   }
 
   function highlight() {
-    for (const row of $('list').children) row.classList?.toggle('selected', row.dataset.name === current);
-    for (const id of ['copy', 'rename', 'delete', 'reveal']) $(id).disabled = !current;
+    let selected = null;
+    for (const row of $('list').children) {
+      const on = row.dataset.name === current;
+      row.setAttribute('aria-selected', String(on));
+      row.tabIndex = on ? 0 : -1;
+      if (on) selected = row;
+    }
+    // Sans sélection, la première ligne reste joignable au clavier.
+    if (!selected && $('list').firstChild) $('list').firstChild.tabIndex = 0;
+    $('v-title').textContent = selected?.dataset.title ?? '';
+    $('v-file').textContent = current ?? '';
+    for (const id of ['copy', 'rename', 'delete', 'reveal', 'play', 'mute', 'fullscreen']) $(id).disabled = !current;
+    $('seek').disabled = !current;
+    controls();
   }
+
+  // Lecteur : barre de Clipper plutôt que celle du navigateur.
+  const icon = (button, name) => button.querySelector('use').setAttribute('href', '#i-' + name);
+  const clock = seconds => {
+    const s = Math.floor(seconds || 0);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  };
+  function controls() {
+    const playing = !player.paused && !!current;
+    icon($('play'), playing ? 'pause' : 'play');
+    $('play').setAttribute('aria-label', playing ? 'Pause' : 'Lecture');
+    $('play').title = `${playing ? 'Pause' : 'Lecture'} (Espace)`;
+    $('big-play').hidden = playing || !current;
+    icon($('mute'), player.muted ? 'muted' : 'volume');
+    $('mute').setAttribute('aria-label', player.muted ? 'Remettre le son' : 'Couper le son');
+    $('mute').title = $('mute').getAttribute('aria-label');
+    $('seek').max = player.duration || 0;
+    $('seek').value = player.currentTime || 0;
+    $('time').textContent = `${clock(player.currentTime)} / ${clock(player.duration)}`;
+  }
+  for (const event of ['play', 'pause', 'timeupdate', 'durationchange', 'volumechange', 'emptied', 'ended', 'error']) {
+    player.addEventListener(event, controls);
+  }
+  const toggle = () => { if (current) player.paused ? player.play() : player.pause(); };
+  const fullscreen = () => document.fullscreenElement ? document.exitFullscreen() : $('video').requestFullscreen();
+  $('play').addEventListener('click', toggle);
+  $('mute').addEventListener('click', () => player.muted = !player.muted);
+  $('fullscreen').addEventListener('click', fullscreen);
+  $('seek').addEventListener('input', e => player.currentTime = Number(e.target.value));
+  // Un clic sur l'image lit ou met en pause ; un glisser emporte le fichier.
+  dragFrom(player, () => current, toggle);
 
   $('copy').addEventListener('click', () => send('copy', current));
   $('reveal').addEventListener('click', () => send('reveal', current));
-  $('rename').addEventListener('click', () => {
-    const name = prompt('Nouveau nom du clip', current.replace(/\.mp4$/i, ''));
-    if (!name) return;
+  $('rename').addEventListener('click', () => open('dlg-rename'));
+  $('delete').addEventListener('click', () => open('dlg-delete'));
+
+  // Boîtes de dialogue.
+  let dialog = null;
+  function open(id) {
+    if (!current) return;
+    dialog = { el: $(id), from: document.activeElement };
+    $('dlg-delete-file').textContent = current;
+    $('rename-input').value = current.replace(/\.mp4$/i, '');
+    dialog.el.hidden = false;
+    if (id === 'dlg-rename') $('rename-input').select();
+    else dialog.el.querySelector('[data-cancel]').focus();
+  }
+  function close() {
+    if (!dialog) return;
+    dialog.el.hidden = true;
+    dialog.from?.focus?.();
+    dialog = null;
+  }
+  for (const b of document.querySelectorAll('[data-cancel]')) b.addEventListener('click', close);
+  $('confirm-delete').addEventListener('click', () => {
     const old = current;
+    close();
     unload();
+    release(old);
+    send('delete', old);
+  });
+  $('rename-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const name = $('rename-input').value.trim();
+    const old = current;
+    close();
+    if (!name || name === old.replace(/\.mp4$/i, '')) return;
+    unload();
+    release(old);
     renaming = old;
     send('rename', `${old}\t${name}`);
-  });
-  $('delete').addEventListener('click', () => {
-    if (!confirm(`Mettre ${current} à la corbeille ?`)) return;
-    const old = current;
-    unload();
-    send('delete', old);
   });
 
   // Un bouton cliqué à la souris rend le focus : Espace commande alors le lecteur au
   // lieu de rejouer « Copier ». Au clavier (Tab), le bouton garde Espace.
-  for (const button of document.querySelectorAll('nav button, #viewer button')) {
+  for (const button of document.querySelectorAll('.cl-header button, .cl-tabs button, .cl-viewer button')) {
     button.addEventListener('click', e => { if (e.detail > 0) button.blur(); });
   }
 
-  // Raccourcis du lecteur : espace, flèches (±5 s), F (plein écran). Le lecteur
-  // sélectionné gère lui-même espace et flèches.
   document.addEventListener('keydown', e => {
-    if (capturing || $('clips-view').hidden || !current) return;
+    if (dialog) {
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      return;
+    }
+    if (capturing || $('clips-view').hidden) return;
     if (e.ctrlKey || e.altKey || e.metaKey) return;
     if (['INPUT', 'SELECT', 'BUTTON'].includes(e.target.tagName)) return;
-    const own = e.target === player;
-    if (e.code === 'Space' && !own) player.paused ? player.play() : player.pause();
-    else if (e.code === 'ArrowLeft' && !own) player.currentTime -= 5;
-    else if (e.code === 'ArrowRight' && !own) player.currentTime += 5;
-    else if (e.code === 'KeyF') document.fullscreenElement ? document.exitFullscreen() : player.requestFullscreen();
+    const row = e.target.closest?.('.cl-clip');
+    if (row && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      const next = e.key === 'ArrowDown' ? row.nextElementSibling : row.previousElementSibling;
+      if (next) { select(next.dataset.name); next.focus(); }
+    } else if (!current) return;
+    else if (e.key === 'Delete') open('dlg-delete');
+    else if (e.key === 'F2') open('dlg-rename');
+    else if (e.code === 'Space') toggle();
+    else if (e.code === 'ArrowLeft') player.currentTime -= 5;
+    else if (e.code === 'ArrowRight') player.currentTime += 5;
+    else if (e.code === 'KeyF') fullscreen();
     else return;
     e.preventDefault();
   });
 
+  showHotkey();
   send('get');
   send('clips');
 </script>
