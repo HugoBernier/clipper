@@ -20,7 +20,8 @@ Prérequis : Windows 10 1903 ou plus récent, GPU avec encodeur H.264 matériel 
 | Action | Comment |
 |---|---|
 | Enregistrer les 30 dernières secondes | **Alt+F10** (un son confirme) |
-| Régler Clipper | Clic sur l'icône (ou clic droit → *Ouvrir Clipper*) : appliqué tout de suite, sans relancer |
+| Revoir et partager un clip | Clic sur l'icône → *Clips* : lire, *Copier* puis Ctrl+V dans Discord, ou glisser le clip dans Discord ; renommer, supprimer (corbeille), montrer dans l'Explorateur |
+| Régler Clipper | Clic sur l'icône (ou clic droit → *Ouvrir Clipper*) → *Réglages* : appliqué tout de suite, sans relancer |
 | Retrouver les clips | `Vidéos\Clipper`, ou clic droit sur l'icône → *Ouvrir le dossier des clips* |
 | Couper le micro | Clic droit sur l'icône → *Micro* |
 | Démarrer avec Windows | Clic droit sur l'icône → *Démarrer avec Windows* |
