@@ -493,14 +493,7 @@ impl App {
         self.microphone
             .volume
             .store(next.microphone_volume, Ordering::Relaxed);
-        // Le thread audio rouvre le micro à sa prochaine vérification.
-        next.microphone_device.clone_into(
-            &mut self
-                .microphone
-                .device
-                .lock()
-                .unwrap_or_else(|p| p.into_inner()),
-        );
+        self.microphone.set_device(next.microphone_device.clone());
         tray::set_microphone(next.microphone);
         // Remapper le dossier du lecteur couperait une lecture en cours : seulement s'il
         // change, et la liste suit.

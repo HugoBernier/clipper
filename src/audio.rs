@@ -5,7 +5,7 @@
 //! (la loopback ne livre rien quand rien ne joue) et coupe les chevauchements.
 
 use std::mem::ManuallyDrop;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -30,8 +30,14 @@ const TOLERANCE: i64 = SEC / 100;
 /// latence de la loopback, pour ne pas devancer un paquet en route.
 const LAG: i64 = SEC / 10;
 const POLL: Duration = Duration::from_millis(10);
-/// Fréquence de vérification du périphérique à capturer.
-const CHECK_DEVICE: Duration = Duration::from_secs(1);
+
+/// Incrémenté à chaque changement de périphérique (par défaut de Windows, branché,
+/// débranché, micro choisi) : chaque source revérifie alors le sien.
+static DEVICES_CHANGED: AtomicU64 = AtomicU64::new(0);
+
+fn devices_changed() {
+    DEVICES_CHANGED.fetch_add(1, Ordering::Release);
+}
 
 /// Position de l'audio émis, en échantillons depuis `origin` (ts QPC).
 pub struct Timeline {
@@ -117,6 +123,20 @@ impl Microphone {
             device: Mutex::new(device),
         }
     }
+
+    /// Le thread audio rouvre le micro si ce choix en désigne un autre.
+    pub fn set_device(&self, id: String) {
+        let mut device = self.device.lock().unwrap_or_else(|p| p.into_inner());
+        if *device != id {
+            *device = id;
+            devices_changed();
+        }
+    }
+}
+
+/// Le micro choisi s'il fait partie des micros branchés ; `None` : celui par défaut.
+fn chosen_microphone<'a>(chosen: &'a str, plugged: &[(String, String)]) -> Option<&'a str> {
+    (!chosen.is_empty() && plugged.iter().any(|(id, _)| id == chosen)).then_some(chosen)
 }
 
 /// Micros branchés : (identifiant Windows, nom affiché). Un micro illisible (pilote
@@ -165,6 +185,12 @@ fn run(
 ) -> Result<()> {
     mf::startup()?;
     let encoder = Encoder::new(bitrate)?;
+    // Windows ne coupe pas une capture quand la sortie par défaut change (casque
+    // branché…) : on suit ses notifications pour rouvrir le bon périphérique. Gardées en
+    // vie jusqu'à la fin du thread ; sans elles, l'audio marche mais ne suit plus.
+    let _notifications = watch_devices()
+        .inspect_err(|e| warn!("changements de périphérique non suivis : {e:#}"))
+        .ok();
     let _ = ready.send(Ok(encoder.format()?));
     // Origine commune : l'échantillon k de chaque source tombe au même instant.
     let origin = mf::now();
@@ -187,6 +213,17 @@ fn run(
         }
         std::thread::sleep(POLL);
     }
+}
+
+fn watch_devices() -> Result<wasapi::DeviceEventRegistration> {
+    let mut callbacks = wasapi::DeviceEventCallbacks::new();
+    // Appelés sur un thread de Windows qui ne doit pas bloquer : on ne fait que signaler.
+    callbacks.set_default_device_callback(|_, _, _| devices_changed());
+    callbacks.set_device_state_callback(|_, _| devices_changed());
+    wasapi::DeviceEnumerator::new()
+        .context("DeviceEnumerator")?
+        .register_notification_callback(callbacks)
+        .context("RegisterEndpointNotificationCallback")
 }
 
 fn frames_duration(frames: u64) -> i64 {
@@ -235,14 +272,11 @@ impl Source {
                 .get_default_device(&wasapi::Direction::Render)
                 .context("sortie par défaut"),
             Source::Microphone(mic) => {
-                let id = mic.device.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                // Windows rend aussi un micro débranché : son état dit s'il est là.
-                let chosen = (!id.is_empty())
-                    .then(|| enumerator.get_device(&id).ok())
-                    .flatten()
-                    .filter(|d| matches!(d.get_state(), Ok(wasapi::DeviceState::Active)));
-                match chosen {
-                    Some(device) => Ok(device),
+                let chosen = mic.device.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                // Windows rend aussi un micro débranché : seule la liste des branchés dit
+                // s'il est là (la même que celle de la fenêtre).
+                match chosen_microphone(&chosen, &microphones()?) {
+                    Some(id) => enumerator.get_device(id).context("micro choisi"),
                     None => enumerator
                         .get_default_device_for_role(
                             &wasapi::Direction::Capture,
@@ -301,8 +335,8 @@ struct Input {
     timeline: Timeline,
     capture: Option<Capture>,
     retry_at: Instant,
-    /// Prochaine vérification du périphérique voulu (sortie par défaut changée…).
-    check_at: Instant,
+    /// Valeur de `DEVICES_CHANGED` quand le périphérique ouvert a été choisi.
+    devices: u64,
     failing: bool,
 }
 
@@ -314,12 +348,14 @@ impl Input {
             timeline: Timeline::new(origin),
             capture: None,
             retry_at: Instant::now(),
-            check_at: Instant::now(),
+            devices: 0,
             failing: false,
         }
     }
 
     fn poll(&mut self, mixer: &mut Mixer) {
+        // Lu avant de choisir le périphérique : un changement pendant le choix sera revu.
+        let devices = DEVICES_CHANGED.load(Ordering::Acquire);
         if !self.source.enabled() {
             if self.capture.take().is_some() {
                 info!("capture {} arrêtée", self.source.name());
@@ -330,17 +366,15 @@ impl Input {
                 Ok((capture, name)) => {
                     info!("capture {} : {name}", self.source.name());
                     self.capture = Some(capture);
-                    self.check_at = Instant::now() + CHECK_DEVICE;
+                    self.devices = devices;
                     self.failing = false;
                 }
                 Err(e) => self.fail(&e),
             }
         } else if let Some(capture) = &self.capture
-            && Instant::now() >= self.check_at
+            && devices != self.devices
         {
-            // Windows ne coupe pas la capture quand la sortie par défaut change (casque
-            // branché…) : sans ça, on continuerait d'enregistrer l'ancien périphérique.
-            self.check_at = Instant::now() + CHECK_DEVICE;
+            self.devices = devices;
             if self
                 .source
                 .target()
@@ -666,5 +700,26 @@ mod tests {
         let p = t.place(now - 3 * PACKET_TS, PACKET);
         assert_eq!(p.skip, 0);
         assert_eq!(t.next_ts(), now - 3 * PACKET_TS + PACKET_TS);
+    }
+
+    fn plugged(ids: &[&str]) -> Vec<(String, String)> {
+        ids.iter()
+            .map(|id| (id.to_string(), "Micro".into()))
+            .collect()
+    }
+
+    #[test]
+    fn chosen_microphone_is_used_while_plugged() {
+        assert_eq!(chosen_microphone("b", &plugged(&["a", "b"])), Some("b"));
+    }
+
+    #[test]
+    fn unplugged_microphone_falls_back_to_default() {
+        assert_eq!(chosen_microphone("b", &plugged(&["a"])), None);
+    }
+
+    #[test]
+    fn no_choice_means_default() {
+        assert_eq!(chosen_microphone("", &plugged(&["a", ""])), None);
     }
 }
