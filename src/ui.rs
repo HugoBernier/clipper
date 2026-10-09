@@ -14,8 +14,9 @@ use std::sync::Once;
 use anyhow::{Context, Result};
 use log::{error, info};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    CreateCoreWebView2EnvironmentWithOptions, ICoreWebView2, ICoreWebView2Controller,
-    ICoreWebView2Environment, ICoreWebView2EnvironmentOptions,
+    COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC, CreateCoreWebView2EnvironmentWithOptions,
+    ICoreWebView2, ICoreWebView2Controller, ICoreWebView2Environment,
+    ICoreWebView2EnvironmentOptions,
 };
 use webview2_com::{
     CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
@@ -312,18 +313,27 @@ fn fail(hwnd: HWND, e: &anyhow::Error) {
     }
 }
 
-fn fit(hwnd: HWND) {
+/// Appelle `f` sur la vue si elle est prête ; une erreur est journalisée.
+fn with_controller(
+    what: &str,
+    f: impl FnOnce(&ICoreWebView2Controller) -> windows::core::Result<()>,
+) {
     WINDOW.with_borrow(|w| {
-        let Some(controller) = w.as_ref().and_then(|w| w.controller.as_ref()) else {
-            return;
-        };
+        if let Some(controller) = w.as_ref().and_then(|w| w.controller.as_ref())
+            && let Err(e) = f(controller)
+        {
+            error!("{what} : {e:#}");
+        }
+    });
+}
+
+fn fit(hwnd: HWND) {
+    with_controller("redimensionnement", |c| {
         let mut rect = RECT::default();
         // SAFETY: fenêtre et contrôleur vivants, sur ce thread.
-        let result = unsafe { GetClientRect(hwnd, &mut rect) }
-            .context("GetClientRect")
-            .and_then(|()| unsafe { controller.SetBounds(rect) }.context("SetBounds"));
-        if let Err(e) = result {
-            error!("redimensionnement : {e:#}");
+        unsafe {
+            GetClientRect(hwnd, &mut rect)?;
+            c.SetBounds(rect)
         }
     });
 }
@@ -331,6 +341,16 @@ fn fit(hwnd: HWND) {
 extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_SIZE => fit(hwnd),
+        // Sans ça, les listes déroulantes s'ouvrent à l'ancienne position de la fenêtre,
+        // et le clavier n'atteint pas la page au retour sur la fenêtre (Alt+Tab).
+        WM_MOVE => with_controller("NotifyParentWindowPositionChanged", |c| {
+            // SAFETY: contrôleur vivant, sur ce thread.
+            unsafe { c.NotifyParentWindowPositionChanged() }
+        }),
+        WM_SETFOCUS => with_controller("MoveFocus", |c| {
+            // SAFETY: contrôleur vivant, sur ce thread.
+            unsafe { c.MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC) }
+        }),
         // Fenêtre quittée (retour au jeu) : une capture du raccourci en cours prend
         // fin, sinon le raccourci resterait suspendu.
         WM_ACTIVATE if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE => refresh(),
