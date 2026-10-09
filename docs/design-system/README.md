@@ -47,6 +47,8 @@ Clipper is a background replay buffer for Windows: one hotkey keeps the last sec
 
 **Borders, shadows, motion.** Edges are 1px `line` hairlines; controls that need an edge to be found use `line-strong` (3:1). No drop shadows inside the window (Windows draws the window's own). Motion stays under 150 ms: hover fills, the toast fading out. No looping animation, including the record dot.
 
+**Scrollbars.** Thin, `line-strong` thumb on a transparent track, shown only when content overflows (a small window, a long clip list). Never the system's light scrollbar.
+
 **States.** Hover: `surface-2` fill or a `line-strong` edge. Focus: a solid 2px `focus` ring, 2px offset, on every interactive element. Disabled: 45 % opacity, no hover.
 
 ## Iconography

@@ -3,6 +3,8 @@ html, body { margin: 0; background: var(--surface-0); color: var(--ink); font-fa
 *, *::before, *::after { box-sizing: border-box; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 [hidden] { display: none !important; }
+/* Scrollbars: thin and dark, only where content overflows. */
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 .cl-row { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; padding: var(--space-4); }
 .cl-stack { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); }
 .cl-icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }

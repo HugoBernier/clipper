@@ -27,7 +27,11 @@ use webview2_com::{
     CreateCoreWebView2EnvironmentCompletedHandler, NavigationStartingEventHandler,
     WebMessageReceivedEventHandler, take_pwstr,
 };
-use windows::Win32::Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
@@ -100,7 +104,7 @@ pub fn open() -> Result<()> {
             WINDOW_EX_STYLE::default(),
             CLASS,
             w!("Clipper"),
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+            WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             WIDTH * dpi / 96,
@@ -112,6 +116,12 @@ pub fn open() -> Result<()> {
         )
     }
     .context("CreateWindowExW (fenêtre)")?;
+    // Teinte avant le premier affichage : pas d'éclair de la barre blanche.
+    tint_title_bar(hwnd);
+    // SAFETY: notre fenêtre, sur ce thread.
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOW);
+    }
     WINDOW.with_borrow_mut(|w| {
         *w = Some(Window {
             hwnd,
@@ -196,6 +206,35 @@ fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
+}
+
+/// Barre de titre de Windows aux couleurs du design system (`surface-0`, `ink`, `line`) :
+/// elle se fond dans la fenêtre et garde Snap, le double-clic et Win+flèches. Avant
+/// Windows 11, seuls le mode sombre (ou rien) s'appliquent : sans gravité.
+fn tint_title_bar(hwnd: HWND) {
+    // COLORREF : 0x00BBGGRR.
+    let dark: u32 = 1;
+    let attributes: [(DWMWINDOWATTRIBUTE, u32); 4] = [
+        (DWMWA_USE_IMMERSIVE_DARK_MODE, dark),
+        (DWMWA_CAPTION_COLOR, 0x001a_1616),
+        (DWMWA_TEXT_COLOR, 0x00f5_f4f4),
+        (DWMWA_BORDER_COLOR, 0x003c_3434),
+    ];
+    for (attribute, value) in attributes {
+        let value = COLORREF(value);
+        // SAFETY: notre fenêtre ; pointeur et taille d'un u32 valides pendant l'appel.
+        let result = unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                attribute,
+                std::ptr::from_ref(&value).cast(),
+                size_of::<COLORREF>() as u32,
+            )
+        };
+        if let Err(e) = result {
+            info!("barre de titre ({}) non teintée : {e}", attribute.0);
+        }
+    }
 }
 
 fn page() -> String {
