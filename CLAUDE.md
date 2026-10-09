@@ -46,7 +46,7 @@ Mesure de synchro A/V : lancer `tools/sync_stimulus.ps1` pendant que Clipper tou
 - Installé par utilisateur dans `%LOCALAPPDATA%\Programs\Clipper` (exe + `clipper.toml`), désinstallable depuis « Applications installées ».
 - Démarrage auto : raccourci `Clipper.lnk` dans `shell:startup` + approbation `StartupApproved\StartupFolder` (case du setup ou du menu de l'icône). Pas la clé `Run` : voir `docs/architecture.md`.
 - Log : `%LOCALAPPDATA%\clipper\clipper.log` (`clipper-debug.log` pour une build debug). Clips : `Vidéos\Clipper`.
-- Icône : maquette `assets/clipper.svg` ; après modification, régénérer `assets/clipper.ico` : `magick -background none -density 384 assets/clipper.svg -define icon:auto-resize=256,64,48,40,32,24,20,16 assets/clipper.ico`.
+- Icône : `assets/clipper.svg` (32 px et plus) et `assets/clipper-small.svg` (16 à 24 px, sans anneau extérieur) ; après modification, régénérer `assets/clipper.ico` : `magick -background none -density 384 ( assets/clipper.svg -resize 256x256 ) ( assets/clipper.svg -resize 64x64 ) ( assets/clipper.svg -resize 48x48 ) ( assets/clipper.svg -resize 40x40 ) ( assets/clipper.svg -resize 32x32 ) ( assets/clipper-small.svg -resize 24x24 ) ( assets/clipper-small.svg -resize 20x20 ) ( assets/clipper-small.svg -resize 16x16 ) assets/clipper.ico` (sous bash, échapper les parenthèses).
 
 ## Commits et versions
 
