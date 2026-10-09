@@ -3,7 +3,8 @@
 //! la fenêtre est ouverte : la fermer le libère.
 //!
 //! Tout se passe sur le thread principal. La page envoie des messages texte, mis en file
-//! puis signalés au thread par `WM_UI` ; `main` les traite et répond par `post`.
+//! puis signalés à la fenêtre principale par `WM_UI` ; `main` les traite et répond par
+//! `post`.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -23,7 +24,6 @@ use webview2_com::{
 use windows::Win32::Foundation::{ERROR_CANCELLED, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Shell::{
     FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
@@ -34,7 +34,7 @@ use windows::core::{HRESULT, HSTRING, PCWSTR, PWSTR, w};
 
 use crate::tray;
 
-/// Envoyé au thread principal : des messages de la page attendent (`take_requests`).
+/// Envoyé à la fenêtre principale : des messages de la page attendent (`take_requests`).
 pub const WM_UI: u32 = WM_APP + 3;
 const CLASS: PCWSTR = w!("ClipperWindow");
 const PAGE: &str = include_str!("ui.html");
@@ -129,6 +129,18 @@ pub fn post(message: &str) {
     if let Err(e) = unsafe { webview.PostWebMessageAsString(&HSTRING::from(message)) } {
         error!("message à la fenêtre : {e:#}");
     }
+}
+
+/// Fait relire l'état par la page ouverte (réglage changé depuis le menu de l'icône).
+pub fn refresh() {
+    if current_hwnd().is_some() {
+        request("get");
+    }
+}
+
+fn request(message: &str) {
+    REQUESTS.with_borrow_mut(|r| r.push_back(message.into()));
+    crate::post_to_main(WM_UI);
 }
 
 /// Messages de la page reçus depuis le dernier appel.
@@ -254,11 +266,10 @@ fn attach(hwnd: HWND, controller: ICoreWebView2Controller) -> Result<()> {
         let mut message = PWSTR::null();
         // SAFETY: arguments valides pendant l'événement ; chaîne libérée par take_pwstr.
         unsafe { args.TryGetWebMessageAsString(&mut message) }?;
-        REQUESTS.with_borrow_mut(|r| r.push_back(take_pwstr(message)));
-        // Traité par la boucle principale, hors du gestionnaire de WebView2 (un
+        // Traité par la fenêtre principale, hors du gestionnaire de WebView2 (un
         // sélecteur de dossier y serait une boucle modale imbriquée).
-        // SAFETY: message posté au thread courant.
-        unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_UI, WPARAM(0), LPARAM(0)) }
+        request(&take_pwstr(message));
+        Ok(())
     }));
     let mut token = 0;
     // SAFETY: gestionnaires COM valides, vue vivante ; ils partent avec le contrôleur.
@@ -354,6 +365,8 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPA
         // Pas de PostQuitMessage : Clipper continue dans la zone de notification.
         WM_DESTROY => {
             WINDOW.with_borrow_mut(|w| *w = None);
+            // Une capture du raccourci en cours prend fin.
+            request("closed");
             info!("fenêtre fermée");
         }
         // SAFETY: traitement par défaut des autres messages.

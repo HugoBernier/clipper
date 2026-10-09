@@ -19,7 +19,6 @@ use windows::Win32::System::Registry::{
     HKEY_CURRENT_USER, REG_BINARY, RRF_RT_REG_BINARY, RegDeleteKeyValueW, RegGetValueW,
     RegSetKeyValueW,
 };
-use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::{
     FOLDERID_Startup, IShellLinkW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
     NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW, ShellLink,
@@ -31,7 +30,7 @@ use crate::{save, ui};
 
 /// Message envoyé par l'icône à la fenêtre cachée.
 const WM_TRAY: u32 = WM_APP + 1;
-/// Envoyé au thread principal pour couper ou réactiver le micro.
+/// Envoyé à la fenêtre principale pour couper ou réactiver le micro.
 pub const WM_MICROPHONE: u32 = WM_APP + 2;
 const ID_OPEN: usize = 1;
 const ID_STARTUP: usize = 2;
@@ -208,7 +207,7 @@ fn show_menu(hwnd: HWND) -> Result<()> {
     // WM_NULL après sont requis pour que le menu se ferme en cliquant ailleurs.
     let choice = unsafe {
         let menu = CreatePopupMenu()?;
-        AppendMenuW(menu, MF_STRING, ID_WINDOW, w!("Ouvrir Clipper"))?;
+        AppendMenuW(menu, MF_STRING, ID_WINDOW, w!("Ouvrir Clipper")).context("AppendMenuW")?;
         AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Ouvrir le dossier des clips"))?;
         AppendMenuW(
             menu,
@@ -241,20 +240,18 @@ fn show_menu(hwnd: HWND) -> Result<()> {
         choice.0 as usize
     };
     match choice {
-        ID_MICROPHONE => {
-            // La config appartient au thread principal : on lui délègue.
-            // SAFETY: message posté au thread courant (celui de la boucle principale).
-            unsafe {
-                PostThreadMessageW(GetCurrentThreadId(), WM_MICROPHONE, WPARAM(0), LPARAM(0))?;
-            }
-        }
+        // La config appartient à l'état principal : on lui délègue.
+        ID_MICROPHONE => crate::post_to_main(WM_MICROPHONE),
         ID_WINDOW => ui::open()?,
         ID_OPEN => {
             let dir = CLIPS_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone();
             std::fs::create_dir_all(&dir)?;
             std::process::Command::new("explorer").arg(&dir).spawn()?;
         }
-        ID_STARTUP => set_startup(!startup)?,
+        ID_STARTUP => {
+            set_startup(!startup)?;
+            ui::refresh();
+        }
         // SAFETY: termine la boucle de messages du thread principal.
         ID_QUIT => unsafe { PostQuitMessage(0) },
         _ => {}
