@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/HugoBernier/clipper/compare/v0.6.0...v0.7.0) (2026-10-09)
+
+
+### Features
+
+* icône définitive et barre de titre aux couleurs du design system ([#19](https://github.com/HugoBernier/clipper/issues/19)) ([ae11ca2](https://github.com/HugoBernier/clipper/commit/ae11ca2da0c43b2b615f309efa81af6a7f469b0e))
+
 ## [0.6.0](https://github.com/HugoBernier/clipper/compare/v0.5.1...v0.6.0) (2026-10-09)
 
 
