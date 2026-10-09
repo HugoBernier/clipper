@@ -1,49 +1,65 @@
 # Clipper
 
-Replay buffer minimal pour Windows : Clipper garde en mémoire les 30 dernières secondes de l'écran et du son, et les enregistre dans un MP4 prêt pour Discord quand on appuie sur un raccourci.
+Clipper garde en mémoire les 30 dernières secondes de votre écran et de votre son. Un raccourci les enregistre dans un MP4, prêt à partager.
 
-- Encodage matériel H.264 (GPU), AAC pour le son du PC et le micro, synchronisés sur la même horloge.
-- Durée, résolution, fps et qualité au choix, avec la taille estimée d'un clip ; par défaut, ~19 Mo pour 30 s.
-- Sans injection ni hook clavier : compatible avec les anti-cheats (EAC, BattlEye).
-- Fenêtre de réglages, icône près de l'horloge, démarrage avec Windows, installeur sans droits admin.
-
-La fenêtre utilise WebView2, le moteur d'Edge fourni avec Windows 11 (aucun navigateur embarqué).
+- Encodage par la carte graphique, pas par le processeur.
+- Son du PC et micro dans le même clip, synchronisés.
+- Durée, résolution, images/s et qualité réglables, avec la taille estimée d'un clip.
+- Pensé pour les anti-triches (EAC, BattlEye) : aucune injection, aucun hook clavier.
 
 ## Installation
 
-Télécharger `ClipperSetup-<version>.exe` depuis la page [Releases](../../releases) et le lancer. Windows SmartScreen peut afficher un avertissement (l'exe n'est pas signé) : *Informations complémentaires* → *Exécuter quand même*.
+Téléchargez `ClipperSetup-<version>.exe` depuis [Releases](../../releases), puis lancez-le. Pas besoin de droits administrateur.
 
-Prérequis : Windows 10 1903 ou plus récent, GPU avec encodeur H.264 matériel (AMD, NVIDIA ou Intel).
+L'installeur n'est pas encore signé : Windows peut afficher un avertissement, et Defender l'a déjà bloqué à tort. Pour vérifier qu'un fichier vient bien de ce dépôt, comparez son empreinte SHA-256 avec celle affichée sur la page de la release.
+
+Prérequis : Windows 11 (ou Windows 10 1903+ avec le runtime WebView2), carte graphique avec encodeur H.264 (AMD, NVIDIA ou Intel).
 
 ## Utilisation
 
-| Action | Comment |
+| Pour… | Faites… |
 |---|---|
 | Enregistrer les 30 dernières secondes | **Alt+F10** (un son confirme) |
-| Revoir et partager un clip | Clic sur l'icône → *Clips* : lire, *Copier* puis Ctrl+V dans Discord, ou glisser le clip dans Discord ; renommer, supprimer (corbeille), montrer dans l'Explorateur |
-| Régler Clipper | Clic sur l'icône (ou clic droit → *Ouvrir Clipper*) → *Réglages* : appliqué tout de suite, sans relancer |
-| Retrouver les clips | `Vidéos\Clipper`, ou clic droit sur l'icône → *Ouvrir le dossier des clips* |
-| Couper le micro | Clic droit sur l'icône → *Micro* |
-| Démarrer avec Windows | Clic droit sur l'icône → *Démarrer avec Windows* |
-| Quitter | Clic droit sur l'icône → *Quitter* |
+| Revoir, copier, glisser, renommer ou supprimer un clip | Clic sur l'icône près de l'horloge → *Clips* |
+| Changer les réglages | Clic sur l'icône → *Réglages* (appliqués tout de suite) |
+| Ouvrir le dossier des clips | `Vidéos\Clipper`, ou bouton *Ouvrir le dossier* |
+| Couper le micro, démarrer avec Windows, quitter | Clic droit sur l'icône |
+
+## Sécurité et vie privée
+
+- **Rien ne quitte votre PC.** Le code de Clipper ne contacte aucun serveur, et sa fenêtre ne peut afficher que sa propre page.
+- **Aucun clip sans votre raccourci.** Les dernières secondes restent en mémoire et sont remplacées en continu ; seul le raccourci les enregistre.
+- **Ce qui est capturé :** l'écran principal, le son du PC et, si activé, le micro. Windows affiche alors en permanence l'icône « micro utilisé ».
+- **Ce qui est écrit sur le disque :** vos clips (`Vidéos\Clipper`), les réglages (`clipper.toml`, à côté de l'exe) et un journal technique sans image ni son (`%LOCALAPPDATA%\clipper\clipper.log`).
+- **Désinstallation :** depuis *Applications installées*. Elle retire l'app, ses raccourcis et le démarrage auto ; vos clips restent.
+
+Signaler une faille : voir [SECURITY.md](SECURITY.md).
+
+## Comment c'est fait
+
+Clipper est écrit en Rust avec l'aide de Claude Code (IA). Chaque changement passe par une pull request, relue et testée avant d'être fusionnée.
+
+- **Tests automatiques** sur la logique qui ne dépend pas de Windows : buffer, mixage audio, lecture des MP4, réglages.
+- **CI bloquante** à chaque modification : formatage, `clippy` sans aucun avertissement, tests.
+- **Code `unsafe` limité** aux fichiers qui appellent Windows, chacun justifié par un commentaire `SAFETY`. Il est interdit dans les modules de logique pure.
+- **Peu de dépendances** : `windows`, `wasapi`, `webview2-com` (accès à Windows), `serde`, `toml` (réglages), `anyhow`, `log`, `simplelog` (erreurs et journal) ; `embed-resource` pour l'icône de l'exe.
+- **Releases construites par la CI** depuis ce dépôt, jamais à la main.
 
 ## Réglages
 
-Fichier `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), créé au premier lancement et réécrit par la fenêtre de réglages. Après une modification à la main, relancer Clipper.
+La fenêtre suffit. Pour éditer à la main : `clipper.toml`, à côté de l'exe (`%LOCALAPPDATA%\Programs\Clipper`), puis relancez Clipper.
 
 | Clé | Défaut | Rôle |
 |---|---|---|
-| `clip_seconds` | `30` | Durée d'un clip, en secondes (10 à 300) |
-| `height` | `720` | Hauteur de sortie (720, 1080, 1440) ; la largeur suit le ratio de l'écran |
+| `clip_seconds` | `30` | Durée d'un clip (10 à 300 s) |
+| `height` | `720` | Hauteur de la vidéo (720, 1080, 1440) ; la largeur suit l'écran |
 | `fps` | `60` | Images par seconde (30 ou 60) |
-| `quality` | `"medium"` | `low`, `medium`, `high` ou `very_high` : fixe le débit ; la taille suit la durée |
-| `hotkey` | `"Alt+F10"` | Raccourci (ex. `"Ctrl+Shift+S"`, touches F1–F24, A–Z, 0–9) |
-| `output_dir` | `"Clipper"` | Dossier des clips, relatif au dossier Vidéos ou absolu |
-| `microphone` | `true` | Mixer le micro de communication au son du PC |
-| `microphone_volume` | `100` | Volume du micro dans le clip, en % (0 à 200) |
-| `microphone_device` | `""` | Micro à capturer (identifiant Windows, choisi dans la fenêtre) ; vide : le micro de communication par défaut |
-
-Log : `%LOCALAPPDATA%\clipper\clipper.log`.
+| `quality` | `"medium"` | `low`, `medium`, `high`, `very_high` |
+| `hotkey` | `"Alt+F10"` | Raccourci (modificateurs + F1–F24, A–Z ou 0–9) |
+| `output_dir` | `"Clipper"` | Dossier des clips, dans Vidéos ou chemin absolu |
+| `microphone` | `true` | Ajouter le micro au clip |
+| `microphone_volume` | `100` | Volume du micro, en % (0 à 200) |
+| `microphone_device` | `""` | Micro choisi ; vide : celui de Windows par défaut |
 
 ## Développement
 
@@ -56,10 +72,9 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt
 ```
 
-- Règles du projet (principes, crates autorisées, commits) : [`CLAUDE.md`](CLAUDE.md)
-- Périmètre, itérations et avancement : [`docs/scope.md`](docs/scope.md)
-- Architecture et choix techniques : [`docs/architecture.md`](docs/architecture.md)
+- Règles du projet : [`CLAUDE.md`](CLAUDE.md)
+- Périmètre et avancement : [`docs/scope.md`](docs/scope.md)
+- Architecture : [`docs/architecture.md`](docs/architecture.md)
+- Apparence de l'interface : [`docs/design-system`](docs/design-system/README.md)
 
-### Commits et releases
-
-Commits au format [Conventional Commits](https://www.conventionalcommits.org/fr/) (`feat(audio): …`, `fix(tray): …`). À chaque push sur `main`, [release-please](https://github.com/googleapis/release-please) tient à jour une *Release PR* qui fixe la prochaine version [SemVer](https://semver.org/lang/fr/) et le [`CHANGELOG.md`](CHANGELOG.md). La fusionner publie la release ; la CI y attache l'installeur.
+Commits au format [Conventional Commits](https://www.conventionalcommits.org/fr/). [release-please](https://github.com/googleapis/release-please) en déduit la version et le [`CHANGELOG.md`](CHANGELOG.md) ; fusionner sa PR publie la release.
