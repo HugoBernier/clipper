@@ -195,7 +195,7 @@
 /* Mise en page de la fenêtre (propre à ui.html). */
 html, body { height: 100%; }
 body { display: flex; flex-direction: column; overflow: hidden; }
-.cl-nav { padding-top: var(--space-2); }
+.cl-thumb canvas { width: 100%; height: 100%; display: block; }
 .cl-body { flex: 1; min-height: 0; }
 .cl-body--clips { height: auto; overflow: hidden; }
 .cl-clips { min-height: 0; }
@@ -228,6 +228,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
   <symbol id="i-chevron" viewBox="0 0 16 16"><path d="M4.5 6.5L8 10l3.5-3.5"/></symbol>
 </svg>
 
+<header class="cl-header">
+  <div class="cl-status"><span class="cl-dot" aria-hidden="true"></span><span class="cl-status__text"><span class="cl-status__title">Enregistrement</span><span class="cl-status__sub" id="status-sub"></span></span></div>
+  <button class="cl-btn cl-btn--secondary" id="open-folder"><svg class="cl-icon"><use href="#i-folder"/></svg>Ouvrir le dossier</button>
+</header>
 <nav class="cl-nav"><div class="cl-tabs" role="tablist">
   <button class="cl-tab" role="tab" id="tab-clips" aria-selected="true"><svg class="cl-icon"><use href="#i-film"/></svg>Clips <span class="cl-count" id="count">0</span></button>
   <button class="cl-tab" role="tab" id="tab-settings" aria-selected="false"><svg class="cl-icon"><use href="#i-sliders"/></svg>Réglages</button>
@@ -381,6 +385,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     capturing = false;
     hotkey = state.hotkey;
     showHotkey();
+    const seconds = Object.assign(document.createElement('span'), { textContent: `sauvegarde les ${state.clip_seconds} dernières secondes` });
+    $('status-sub').replaceChildren(kbd(hotkey), seconds);
+    newSince = Number(state.new_since) || 0;
+    for (const row of $('list').children) row.classList.toggle('cl-clip--new', isNew(row));
     $('empty-hotkey').replaceChildren(kbd(hotkey));
     $('volume').value = `${state.microphone_volume} %`;
     $('clips-dir').textContent = state.clips_dir;
@@ -464,8 +472,13 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     });
   }
 
+  $('open-folder').addEventListener('click', () => send('open_folder'));
+
   // Bibliothèque.
   const player = $('player');
+  // Clips modifiés après cet instant (ms) : « Nouveau » (fixé par Rust).
+  let newSince = 0;
+  const isNew = row => newSince > 0 && Number(row.dataset.modified) > newSince;
   let current = null;
   // Renommage en cours (ancien nom), puis clip à resélectionner à la liste suivante :
   // le nouveau nom annoncé par Rust, ou l'ancien si le renommage a échoué.
@@ -498,7 +511,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     list.textContent = '';
     let found = false;
     for (const line of lines) {
-      const [name, modified, size, duration] = line.split('\t');
+      const [name, modified, size, duration, height, fps] = line.split('\t');
       const row = document.createElement('div');
       row.className = 'cl-clip';
       row.setAttribute('role', 'option');
@@ -510,9 +523,10 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       body.append(
         Object.assign(document.createElement('span'), { className: 'cl-clip__title', textContent: row.dataset.title }),
         Object.assign(document.createElement('span'), { className: 'cl-clip__file', textContent: name }),
-        Object.assign(document.createElement('span'), { className: 'cl-clip__meta', textContent: `${formatDuration(duration)} · ${decimal(size / 1e6)} Mo` }),
+        Object.assign(document.createElement('span'), { className: 'cl-clip__meta', textContent: `${decimal(size / 1e6)} Mo` + (height ? ` · ${height}p · ${fps} i/s` : '') }),
       );
-      row.append(body);
+      row.classList.toggle('cl-clip--new', isNew(row));
+      row.append(thumbnail(row, formatDuration(duration)), body);
       row.addEventListener('click', () => select(name));
       dragFrom(row, () => name);
       list.append(row);
@@ -529,6 +543,63 @@ body { display: flex; flex-direction: column; overflow: hidden; }
       if ([...list.children].some(r => r.dataset.name === pick)) select(pick, false);
     }
     highlight();
+  }
+
+  // Vignettes : un lecteur caché prend l'image à 1 s de chaque clip visible, un clip à
+  // la fois, et la garde pour les listes suivantes (clé : nom et date).
+  const thumbs = new Map();
+  let queue = [];
+  let grabbing = null;
+  const grabber = Object.assign(document.createElement('video'), { muted: true, preload: 'auto' });
+  const thumbKey = row => `${row.dataset.name}\t${row.dataset.modified}`;
+  const seen = new IntersectionObserver(entries => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      seen.unobserve(entry.target);
+      queue.push(entry.target);
+    }
+    grabNext();
+  }, { root: $('list') });
+
+  function thumbnail(row, duration) {
+    const box = Object.assign(document.createElement('span'), { className: 'cl-thumb' });
+    const canvas = thumbs.get(thumbKey(row)) ?? Object.assign(document.createElement('canvas'), { width: 192, height: 108 });
+    box.append(canvas, Object.assign(document.createElement('span'), { className: 'cl-thumb__chip', textContent: duration }));
+    if (!thumbs.has(thumbKey(row))) seen.observe(row);
+    return box;
+  }
+
+  function grabNext() {
+    while (!grabbing && queue.length) {
+      const row = queue.shift();
+      if (!row.isConnected || thumbs.has(thumbKey(row))) continue;
+      grabbing = row;
+      grabber.src = clipUrl(row.dataset.name, row.dataset.modified);
+    }
+  }
+  function grabDone() {
+    grabbing = null;
+    grabber.removeAttribute('src');
+    grabber.load();
+    grabNext();
+  }
+  grabber.addEventListener('loadedmetadata', () => grabber.currentTime = Math.min(1, (grabber.duration || 0) / 2));
+  grabber.addEventListener('seeked', () => {
+    const row = grabbing;
+    if (!row) return;
+    const canvas = row.querySelector('canvas');
+    // Recadré au centre en 16:9 (un écran ultra-large garde le milieu de l'image).
+    const w = grabber.videoWidth, h = grabber.videoHeight;
+    const sw = Math.min(w, h * 16 / 9), sh = sw * 9 / 16;
+    canvas.getContext('2d').drawImage(grabber, (w - sw) / 2, (h - sh) / 2, sw, sh, 0, 0, canvas.width, canvas.height);
+    thumbs.set(thumbKey(row), canvas);
+    grabDone();
+  });
+  grabber.addEventListener('error', grabDone);
+  // Lâche un clip avant de le renommer ou de le supprimer.
+  function release(name) {
+    queue = queue.filter(row => row.dataset.name !== name);
+    if (grabbing?.dataset.name === name) grabDone();
   }
 
   // Le glisser HTML ne transporte pas de fichier : Rust lance un glisser natif.
@@ -561,11 +632,13 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
 
+  // `v` : un clip renommé puis remplacé sous le même nom n'est pas lu depuis le cache.
+  const clipUrl = (name, modified) => `https://clips.clipper/${encodeURIComponent(name)}?v=${modified ?? ''}`;
+
   function select(name, play = true) {
     current = name;
     const row = [...$('list').children].find(r => r.dataset.name === name);
-    // `v` : un clip renommé puis remplacé sous le même nom n'est pas lu depuis le cache.
-    player.src = `https://clips.clipper/${encodeURIComponent(name)}?v=${row?.dataset.modified ?? ''}`;
+    player.src = clipUrl(name, row?.dataset.modified);
     if (play) player.play().catch(() => {});
     highlight();
   }
@@ -654,6 +727,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     const old = current;
     close();
     unload();
+    release(old);
     send('delete', old);
   });
   $('rename-form').addEventListener('submit', e => {
@@ -663,6 +737,7 @@ body { display: flex; flex-direction: column; overflow: hidden; }
     close();
     if (!name || name === old.replace(/\.mp4$/i, '')) return;
     unload();
+    release(old);
     renaming = old;
     send('rename', `${old}\t${name}`);
   });

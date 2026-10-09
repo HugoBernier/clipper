@@ -22,7 +22,8 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use log::{error, info, warn};
 use windows::Win32::Foundation::{
-    ERROR_ALREADY_EXISTS, ERROR_SHARING_VIOLATION, GetLastError, HWND, LPARAM, LRESULT, WPARAM,
+    ERROR_ALREADY_EXISTS, ERROR_HOTKEY_ALREADY_REGISTERED, ERROR_SHARING_VIOLATION, GetLastError,
+    HWND, LPARAM, LRESULT, WPARAM,
 };
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -319,8 +320,9 @@ fn handle_ui(request: &str) {
             Ok(()) if command == "closed" => {}
             Ok(()) => ui::post(&app.state()),
             Err(e) => {
-                warn!("réglage refusé : {e:#}");
-                ui::post(&format!("{}error={e:#}\n", app.state()));
+                warn!("réglage refusé ({command} {arg}) : {e:#}");
+                let message = setting_error(command, arg, &e);
+                ui::post(&format!("{}error={message}\n", app.state()));
             }
         }
     });
@@ -332,13 +334,13 @@ fn handle_ui(request: &str) {
 fn handle_library(command: &str, arg: &str) -> bool {
     let refresh = match command {
         "clips" | "delete" | "rename" => true,
-        "copy" | "drag" | "reveal" => false,
+        "copy" | "drag" | "reveal" | "open_folder" => false,
         _ => return false,
     };
     let mut dir = None;
     with_app(|app| dir = Some(app.out_dir.clone()));
     let Some(dir) = dir else {
-        ui::post("error\nClipper est occupé, réessayez.");
+        ui::post("error\nClipper est occupé, réessayez");
         return true;
     };
     let clip = |name: &str| -> Result<PathBuf> {
@@ -351,6 +353,7 @@ fn handle_library(command: &str, arg: &str) -> bool {
         "copy" => clip(arg).and_then(|p| shell::copy(&p)),
         "drag" => clip(arg).and_then(|p| shell::drag(owner, &p)),
         "reveal" => clip(arg).and_then(|p| shell::reveal(&p)),
+        "open_folder" => shell::open_folder(&dir),
         "delete" => clip(arg).and_then(|p| retry_while_in_use(|| shell::recycle(owner, &p))),
         "rename" => match arg.split_once('\t') {
             Some((old, new)) => {
@@ -367,14 +370,50 @@ fn handle_library(command: &str, arg: &str) -> bool {
         Ok(()) if command == "copy" => ui::post(&format!("copied\n{arg}")),
         Ok(()) => {}
         Err(e) => {
-            warn!("{command} : {e:#}");
-            ui::post(&format!("error\n{e:#}"));
+            warn!("{command} {arg} : {e:#}");
+            ui::post(&format!("error\n{}", library_error(command, e)));
         }
     }
     if refresh {
         post_clips(&dir);
     }
     true
+}
+
+/// Message court pour la fenêtre (règles de texte du design system) ; le détail va au
+/// log.
+fn library_error(command: &str, e: &anyhow::Error) -> String {
+    match command {
+        // Les refus de nom sont rédigés pour l'utilisateur (`library::rename`).
+        "rename" => e.to_string(),
+        "copy" => "Copie impossible".into(),
+        "drag" => "Glisser impossible".into(),
+        "delete" => "Suppression impossible".into(),
+        "open_folder" => "Dossier inaccessible".into(),
+        _ => "Clip introuvable".into(),
+    }
+}
+
+/// Message court pour un réglage refusé ; le détail va au log.
+fn setting_error(command: &str, arg: &str, e: &anyhow::Error) -> &'static str {
+    let key = arg.split_once('=').map_or("", |(key, _)| key);
+    match (command, key) {
+        _ if e.to_string() == NOT_SAVED => NOT_SAVED,
+        ("set", "hotkey") if hotkey_taken(e) => "Raccourci déjà utilisé",
+        ("set", "hotkey") => "Raccourci refusé",
+        ("pick_folder", _) | ("set", "output_dir") => "Dossier inaccessible",
+        ("startup", _) => "Démarrage avec Windows non modifié",
+        _ => "Réglage non appliqué",
+    }
+}
+
+fn hotkey_taken(e: &anyhow::Error) -> bool {
+    let taken = HRESULT::from_win32(ERROR_HOTKEY_ALREADY_REGISTERED.0);
+    e.chain().any(|cause| {
+        cause
+            .downcast_ref::<windows::core::Error>()
+            .is_some_and(|w| w.code() == taken)
+    })
 }
 
 /// Le lecteur vient de lâcher le clip, mais le moteur de la page ferme le fichier un
@@ -414,7 +453,7 @@ fn post_clips(dir: &Path) {
         }
         Err(e) => {
             warn!("liste des clips : {e:#}");
-            ui::post(&format!("error\n{e:#}"));
+            ui::post("error\nDossier illisible");
         }
     }
 }
@@ -508,9 +547,7 @@ impl App {
         }
         self.config = next;
         info!("réglage : {key} = {value}");
-        self.config
-            .save(&self.config_path)
-            .context("réglage appliqué, mais non enregistré")
+        self.config.save(&self.config_path).context(NOT_SAVED)
     }
 
     fn pause_hotkey(&mut self) -> Result<()> {
@@ -582,11 +619,12 @@ impl App {
         }
         let estimate = config::estimated_mb(format.bitrate, AUDIO_BPS, self.config.clip_seconds);
         state.push_str(&format!(
-            "clips_dir={}\nstartup={}\nwidth={}\nestimate_mb={estimate:.0}\nbitrate_mbps={:.1}\n",
+            "clips_dir={}\nstartup={}\nwidth={}\nestimate_mb={estimate:.0}\nbitrate_mbps={:.1}\nnew_since={}\n",
             self.out_dir.display(),
             tray::startup_enabled(),
             format.width,
             f64::from(format.bitrate) / 1e6,
+            ui::new_since_ms(),
         ));
         // Micros branchés, en paires identifiant⇥nom.
         match audio::microphones() {
@@ -705,6 +743,9 @@ fn tooltip(config: &Config) -> String {
         config.hotkey, config.clip_seconds
     )
 }
+
+/// Réglage appliqué mais pas écrit dans `clipper.toml`.
+const NOT_SAVED: &str = "Réglage appliqué, mais non enregistré";
 
 fn register_hotkey(window: HWND, hotkey: &Hotkey) -> Result<()> {
     // SAFETY: raccourci global lié à notre fenêtre principale ; pas de hook clavier.

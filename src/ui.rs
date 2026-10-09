@@ -13,6 +13,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use log::{error, info};
@@ -68,6 +69,10 @@ thread_local! {
     /// Nos navigations (`load_page`) pas encore vues par la garde de navigation : seules
     /// elles passent.
     static OWN_NAVIGATIONS: Cell<u32> = const { Cell::new(0) };
+    /// Un clip modifié après cet instant (ms) est « Nouveau » : la dernière ouverture de
+    /// la fenêtre, ou le lancement de Clipper avant la première.
+    static NEW_SINCE: Cell<u64> = const { Cell::new(0) };
+    static OPENED_AT: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Ouvre la fenêtre, ou la ramène au premier plan si elle l'est déjà.
@@ -81,6 +86,10 @@ pub fn open() -> Result<()> {
         return Ok(());
     }
     register_class()?;
+    if OPENED_AT.get() != 0 {
+        NEW_SINCE.set(OPENED_AT.get());
+    }
+    OPENED_AT.set(now_ms());
     // SAFETY: GetDpiForSystem n'a pas de précondition.
     let dpi = unsafe { GetDpiForSystem() } as i32;
     // SAFETY: classe enregistrée ci-dessus ; fenêtre utilisée sur ce thread.
@@ -160,8 +169,12 @@ fn request(message: &str) {
     crate::post_to_main(WM_UI);
 }
 
-/// Dossier servi au lecteur ; appliqué tout de suite si la page est ouverte.
+/// Dossier servi au lecteur ; appliqué tout de suite si la page est ouverte. Le premier
+/// appel, au lancement, fixe aussi le départ des clips « Nouveau ».
 pub fn set_clips_dir(dir: &Path) {
+    if NEW_SINCE.get() == 0 {
+        NEW_SINCE.set(now_ms());
+    }
     CLIPS_DIR.with_borrow_mut(|d| *d = dir.to_path_buf());
     let webview = WINDOW.with_borrow(|w| w.as_ref().and_then(|w| w.webview.clone()));
     // Un nouveau mappage ne vaut que pour les pages chargées ensuite : on recharge.
@@ -170,6 +183,17 @@ pub fn set_clips_dir(dir: &Path) {
     {
         error!("dossier des clips pour le lecteur : {e:#}");
     }
+}
+
+/// Instant (ms depuis 1970) après lequel un clip est « Nouveau ».
+pub fn new_since_ms() -> u64 {
+    NEW_SINCE.get()
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 fn load_page(webview: &ICoreWebView2) -> Result<()> {

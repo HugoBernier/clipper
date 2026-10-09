@@ -21,7 +21,7 @@ Clipper is a background replay buffer for Windows: one hotkey keeps the last sec
 - **Show, don't instruct.** Prefer a Kbd or a control to a sentence: the empty state is "Aucun clip" plus Alt+F10, not a how-to. When a sentence is unavoidable, it addresses the user with "vous".
 - **Numbers the French way**: comma decimal and a space before the unit — "15,2 Mo", "30 s", "100 %", "60 i/s". Resolutions as "720p", "1440p".
 - **Dates are relative** in lists: "Aujourd’hui · 21:14", "Hier · 23:05", then "8 oct. · 21:14". File names stay as written on disk: `clip_20261008_211403.mp4`.
-- **Errors say what is wrong** in a few words, then the fix if the user has one: "Aucun écran détecté", "Raccourci déjà utilisé". No apology, no error code alone.
+- **Errors say what is wrong** in a few words, then the fix if the user has one: "Raccourci déjà utilisé", "Nom déjà pris", "Clip en cours d'utilisation". No apology, no error code; the technical detail goes to the log.
 - Product name: "Clipper", capital C, never "CLIPPER" or "clipper" in UI text.
 
 ## Visual foundations

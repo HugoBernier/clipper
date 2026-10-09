@@ -26,7 +26,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, Interface, PCWSTR, w};
 
-use crate::{save, ui};
+use crate::{save, shell, ui};
 
 /// Message envoyé par l'icône à la fenêtre cachée.
 const WM_TRAY: u32 = WM_APP + 1;
@@ -245,8 +245,7 @@ fn show_menu(hwnd: HWND) -> Result<()> {
         ID_WINDOW => ui::open()?,
         ID_OPEN => {
             let dir = CLIPS_DIR.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            std::fs::create_dir_all(&dir)?;
-            std::process::Command::new("explorer").arg(&dir).spawn()?;
+            shell::open_folder(&dir)?;
         }
         ID_STARTUP => {
             let result = set_startup(!startup);
