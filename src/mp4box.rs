@@ -39,7 +39,8 @@ pub fn parse(data: &[u8], from: usize, to: usize) -> Result<Vec<Mp4Box>> {
         let head = data.get(i..to).context("en-tête de boîte tronqué")?;
         let (len, header, kind) = header(head).context("en-tête de boîte tronqué")?;
         let len = if len == 0 { to - i } else { len as usize };
-        if len < header || i + len > to {
+        // Taille lue dans le fichier : un fichier corrompu ne doit pas faire déborder.
+        if len < header || i.checked_add(len).is_none_or(|end| end > to) {
             bail!("boîte invalide à l'offset {i}");
         }
         boxes.push(Mp4Box {
@@ -51,4 +52,19 @@ pub fn parse(data: &[u8], from: usize, to: usize) -> Result<Vec<Mp4Box>> {
         i += len;
     }
     Ok(boxes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn huge_size_is_an_error_not_an_overflow() {
+        // Une boîte de 8 octets, puis une boîte 64 bits dont la taille déborderait.
+        let mut data = vec![0, 0, 0, 8, b'f', b'r', b'e', b'e'];
+        data.extend_from_slice(&1u32.to_be_bytes());
+        data.extend_from_slice(b"free");
+        data.extend_from_slice(&u64::MAX.to_be_bytes());
+        assert!(parse(&data, 0, data.len()).is_err());
+    }
 }

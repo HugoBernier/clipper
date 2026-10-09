@@ -12,9 +12,9 @@ use windows::Win32::System::Ole::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_LBUTTON};
 use windows::Win32::UI::Shell::{
     BHID_DataObject, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
-    FOFX_RECYCLEONDELETE, FileOperation, IFileOperation, IFileOperationProgressSink,
-    ILCreateFromPathW, ILFree, IShellItem, SHCreateItemFromParsingName, SHDoDragDrop,
-    SHOpenFolderAndSelectItems,
+    FOF_WANTNUKEWARNING, FOFX_RECYCLEONDELETE, FileOperation, IFileOperation,
+    IFileOperationProgressSink, ILCreateFromPathW, ILFree, IShellItem, SHCreateItemFromParsingName,
+    SHDoDragDrop, SHOpenFolderAndSelectItems,
 };
 use windows::core::HSTRING;
 
@@ -46,7 +46,8 @@ pub fn drag(owner: Option<HWND>, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Vers la corbeille, donc récupérable.
+/// Vers la corbeille, donc récupérable. Sans corbeille (clé USB, partage réseau),
+/// Windows demande confirmation avant de supprimer pour de bon.
 pub fn recycle(owner: Option<HWND>, path: &Path) -> Result<()> {
     // SAFETY: objets COM du Shell, créés et utilisés sur ce thread (STA).
     unsafe {
@@ -57,6 +58,7 @@ pub fn recycle(owner: Option<HWND>, path: &Path) -> Result<()> {
             .SetOperationFlags(
                 FOF_ALLOWUNDO
                     | FOF_NOCONFIRMATION
+                    | FOF_WANTNUKEWARNING
                     | FOF_SILENT
                     | FOF_NOERRORUI
                     | FOFX_RECYCLEONDELETE,
@@ -71,7 +73,11 @@ pub fn recycle(owner: Option<HWND>, path: &Path) -> Result<()> {
         operation
             .PerformOperations()
             .context("mise à la corbeille (clip en cours d'utilisation ?)")?;
-        if operation.GetAnyOperationsAborted()?.as_bool() {
+        if operation
+            .GetAnyOperationsAborted()
+            .context("GetAnyOperationsAborted")?
+            .as_bool()
+        {
             bail!("mise à la corbeille annulée");
         }
     }

@@ -152,6 +152,8 @@
   // Onglets.
   for (const [tab, view] of [['tab-clips', 'clips-view'], ['tab-settings', 'settings-view']]) {
     $(tab).addEventListener('click', () => {
+      // Changer d'onglet met fin à une capture du raccourci (Rust le remet).
+      if (capturing) send('get');
       for (const t of ['tab-clips', 'tab-settings']) $(t).setAttribute('aria-selected', String(t === tab));
       $('clips-view').hidden = view !== 'clips-view';
       $('settings-view').hidden = view !== 'settings-view';
@@ -256,7 +258,9 @@
   // sélectionné gère lui-même espace et flèches.
   document.addEventListener('keydown', e => {
     if (capturing || $('clips-view').hidden || !current) return;
-    if (['INPUT', 'SELECT', 'BUTTON'].includes(e.target.tagName)) return;
+    if (['INPUT', 'SELECT'].includes(e.target.tagName)) return;
+    // Après un clic sur « Copier », Espace mettrait en pause, pas recopier (le
+    // preventDefault ci-dessous empêche le bouton de se déclencher).
     const own = e.target === player;
     if (e.code === 'Space' && !own) player.paused ? player.play() : player.pause();
     else if (e.code === 'ArrowLeft' && !own) player.currentTime -= 5;

@@ -108,7 +108,7 @@ fn find_box(
         let (size, header, found) = mp4box::header(&head[..read]).context("en-tête tronqué")?;
         let size = if size == 0 { to - pos } else { size };
         ensure!(
-            size >= header as u64 && pos + size <= to,
+            size >= header as u64 && pos.checked_add(size).is_some_and(|end| end <= to),
             "boîte invalide à l'offset {pos}"
         );
         if &found == kind {
@@ -182,8 +182,8 @@ pub fn rename(dir: &Path, old: &str, input: &str) -> Result<String> {
     ensure!(from.is_file(), "clip introuvable : {old}");
     let new = new_name(input)?;
     let to = clip_path(dir, &new)?;
-    // Changer seulement la casse : Windows voit le même fichier.
-    if !new.eq_ignore_ascii_case(old) && to.exists() {
+    // Changer seulement la casse (accents compris) : NTFS voit le même fichier.
+    if new.to_lowercase() != old.to_lowercase() && to.exists() {
         bail!("un clip s'appelle déjà {new}");
     }
     std::fs::rename(&from, &to)
@@ -282,6 +282,20 @@ mod tests {
     }
 
     #[test]
+    fn huge_box_size_is_an_error_not_an_overflow() {
+        let dir = temp_dir("overflow");
+        // Boîte 64 bits dont la taille ferait déborder position + taille.
+        let mut file = bx(b"ftyp", b"isom");
+        let at = file.len() as u64;
+        file.extend_from_slice(&1u32.to_be_bytes());
+        file.extend_from_slice(b"free");
+        file.extend_from_slice(&(u64::MAX - at + 1).to_be_bytes());
+        std::fs::write(dir.join("evil.mp4"), file).unwrap();
+        assert!(file_duration(&dir.join("evil.mp4")).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
     fn lists_only_mp4_newest_first() {
         let dir = temp_dir("list");
         let clip = [bx(b"ftyp", b"isom"), moov(&[mvhd_v0(1000, 30_000)])].concat();
@@ -364,6 +378,9 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("b.mp4")).unwrap(), b"b");
         assert_eq!(rename(&dir, "a.mp4", "ace").unwrap(), "ace.mp4");
         assert!(dir.join("ace.mp4").exists() && !dir.join("a.mp4").exists());
+        // Changer seulement la casse, accents compris : pas une collision.
+        std::fs::write(dir.join("été.mp4"), b"e").unwrap();
+        assert_eq!(rename(&dir, "été.mp4", "Été").unwrap(), "Été.mp4");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
