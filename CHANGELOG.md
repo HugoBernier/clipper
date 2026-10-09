@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/HugoBernier/clipper/compare/v0.5.0...v0.5.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **config:** retirer 120 et 144 fps ([#14](https://github.com/HugoBernier/clipper/issues/14)) ([56daf2d](https://github.com/HugoBernier/clipper/commit/56daf2ddc133a8f1cc72d4e171469ad739b1fc2e))
+
 ## [0.5.0](https://github.com/HugoBernier/clipper/compare/v0.4.1...v0.5.0) (2026-10-09)
 
 
