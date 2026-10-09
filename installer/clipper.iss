@@ -49,9 +49,6 @@ Name: "{userstartup}\Clipper"; Filename: "{app}\clipper.exe"; Tasks: startup
 ; État « activé » dans Gestionnaire des tâches > Applications de démarrage.
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder"; ValueType: binary; ValueName: "Clipper.lnk"; ValueData: "02 00 00 00 00 00 00 00 00 00 00 00"; Tasks: startup
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder"; ValueType: none; ValueName: "Clipper.lnk"; Flags: uninsdeletevalue
-; Anciennes versions : démarrage par la clé Run, remplacée par le dossier Démarrage.
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Clipper"; Flags: deletevalue uninsdeletevalue
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: none; ValueName: "Clipper"; Flags: deletevalue uninsdeletevalue
 
 [Run]
 Filename: "{app}\clipper.exe"; Description: "Lancer Clipper"; Flags: nowait postinstall
