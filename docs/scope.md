@@ -44,7 +44,8 @@ Depuis l'itération 9 : la durée, la résolution, les fps et la qualité sont d
 - volume du son du PC (seul le micro est réglable) ;
 - déplacer les anciens clips quand on change de dossier ;
 - préréglages de qualité (retirés à l'itération 9) ;
-- thème clair, choix du thème.
+- thème clair, choix du thème ;
+- signature de code (abandonnée le 2026-10-10 : démarches trop lourdes pour une petite app ; Windows peut afficher un avertissement ou une fausse alerte antivirus).
 
 Les lignes « dans le lecteur… » à « déplacer les anciens clips… » ont été proposées le 2026-10-09 : à demander quand le besoin se présente. Les vignettes, d'abord ici, entrent à l'itération 11b (design system validé le 2026-10-09).
 

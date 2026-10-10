@@ -11,7 +11,7 @@ Clipper garde en mémoire les 30 dernières secondes de votre écran et de votre
 
 Téléchargez `ClipperSetup-<version>.exe` depuis [Releases](../../releases), puis lancez-le. Pas besoin de droits administrateur.
 
-Au premier lancement, Windows peut afficher un avertissement, car l'installeur n'est pas encore signé : cliquez sur *Informations complémentaires*, puis *Exécuter quand même*.
+Au premier lancement, Windows peut afficher un avertissement, car l'installeur n'est pas signé : cliquez sur *Informations complémentaires*, puis *Exécuter quand même*.
 
 Il faut Windows 10 ou 11 et une carte graphique AMD, NVIDIA ou Intel récente.
 
@@ -33,7 +33,7 @@ Il faut Windows 10 ou 11 et une carte graphique AMD, NVIDIA ou Intel récente.
 - **Ce qui est écrit sur le disque :** vos clips (`Vidéos\Clipper`), les réglages (`clipper.toml`, à côté de l'exe) et un journal technique sans image ni son (`%LOCALAPPDATA%\clipper\clipper.log`).
 - **Désinstallation :** depuis *Applications installées*. Elle retire l'app, ses raccourcis et le démarrage auto ; vos clips restent.
 
-Signaler une faille : voir [SECURITY.md](SECURITY.md). Signature des releases : voir [CODE_SIGNING.md](CODE_SIGNING.md).
+Signaler une faille : voir [SECURITY.md](SECURITY.md).
 
 ## Comment c'est fait
 
