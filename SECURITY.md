@@ -19,4 +19,4 @@ Tout ce qui contredit les promesses de la section [Sécurité et vie privée](RE
 - Clipper lit, renomme ou supprime un fichier hors du dossier des clips ;
 - l'installeur ou l'app donne plus de droits qu'il n'en faut.
 
-Ne sont pas des failles : une détection antivirus à tort (l'exe n'est pas encore signé) ou un bug sans conséquence sur vos données. Pour ceux-là, ouvrez un ticket normal.
+Ne sont pas des failles : une détection antivirus à tort (l'exe n'est pas signé) ou un bug sans conséquence sur vos données. Pour ceux-là, ouvrez un ticket normal.
