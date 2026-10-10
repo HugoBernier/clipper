@@ -48,3 +48,18 @@ jobs:
         run: |
           $setup = Get-ChildItem target\installer\ClipperSetup-*.exe | Select-Object -First 1
           gh release upload "${{ needs.release-please.outputs.tag_name }}" $setup.FullName --clobber
+      # Defender peut signaler l'installeur non signé une fois l'installation finie :
+      # chaque release le dit, pour qu'on ne croie pas à un virus.
+      - name: Prévenir de la fausse alerte dans les notes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ needs.release-please.outputs.tag_name }}"
+          $notes = gh release view $tag --json body --jq .body
+          $alerte = @"
+          ### Installation
+
+          Juste après l'installation, Windows Defender peut signaler l'installeur comme dangereux et le supprimer. C'est une fausse alerte, due à l'absence de signature : Clipper est installé et fonctionne.
+          "@
+          gh release edit $tag --notes ($notes + "`n`n" + $alerte)
