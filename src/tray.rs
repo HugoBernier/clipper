@@ -20,8 +20,8 @@ use windows::Win32::System::Registry::{
     RegSetKeyValueW,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_Startup, IShellLinkW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW, ShellLink,
+    FOLDERID_Programs, FOLDERID_Startup, IShellLinkW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD,
+    NIM_DELETE, NIM_MODIFY, NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW, ShellLink,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{HSTRING, Interface, PCWSTR, w};
@@ -320,6 +320,22 @@ pub fn set_startup(enabled: bool) -> Result<()> {
         "démarrage avec Windows : {}",
         if enabled { "activé" } else { "désactivé" }
     );
+    Ok(())
+}
+
+/// Version portable (l'exe seul, sans installeur) : le raccourci du menu Démarrer qui
+/// la rend trouvable dans la recherche Windows. Même fichier que celui de l'installeur :
+/// une copie installée le trouve déjà là et n'y touche pas. Rien en debug, pour ne pas
+/// pointer le menu Démarrer sur `target\debug`.
+pub fn ensure_start_menu_shortcut() -> Result<()> {
+    if cfg!(debug_assertions) {
+        return Ok(());
+    }
+    let link = save::known_folder(&FOLDERID_Programs)?.join(SHORTCUT);
+    if !link.exists() {
+        create_shortcut(&link, &std::env::current_exe()?)?;
+        info!("raccourci du menu Démarrer créé : {}", link.display());
+    }
     Ok(())
 }
 

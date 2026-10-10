@@ -199,6 +199,9 @@ fn run() -> Result<()> {
         .inspect_err(|e| warn!("icône de notification indisponible : {e:#}"))
         .ok();
     tray::set_microphone(config.microphone);
+    if let Err(e) = tray::ensure_start_menu_shortcut() {
+        warn!("raccourci du menu Démarrer : {e:#}");
+    }
     ui::set_clips_dir(&out_dir);
     let saving = Arc::new(AtomicBool::new(false));
     APP.with_borrow_mut(|app| {
