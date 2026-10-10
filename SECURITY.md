@@ -2,7 +2,7 @@
 
 ## Signaler une faille
 
-Utilisez le signalement privé de GitHub : onglet **Security** → **Report a vulnerability**. N'ouvrez pas de ticket public : la faille serait visible avant d'être corrigée.
+Utilisez le signalement privé de GitHub (compte GitHub requis) : onglet **Security and quality** du dépôt (dans le menu **•••** si la fenêtre est étroite) → **Report a vulnerability**. N'ouvrez pas de ticket public : la faille serait visible avant d'être corrigée.
 
 Décrivez ce que vous avez fait, ce qui s'est passé et la version de Clipper. Vous aurez une réponse sous quelques jours ; c'est un projet personnel, pas une équipe d'astreinte.
 
