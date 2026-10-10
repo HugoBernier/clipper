@@ -9,11 +9,14 @@ Clipper garde en mémoire les 30 dernières secondes de votre écran et de votre
 
 ## Installation
 
-Téléchargez `ClipperSetup-<version>.exe` depuis [Releases](../../releases), puis lancez-le. Pas besoin de droits administrateur.
+Deux choix, sur la page [Releases](../../releases), sans droits administrateur :
+
+- **Installeur** `ClipperSetup-<version>.exe` : entrée au menu Démarrer et désinstallation depuis *Applications installées*.
+- **Version portable** `Clipper.exe` : l'app seule. Rangez-la dans son propre dossier (ses réglages s'enregistrent à côté), puis lancez-la ; elle s'ajoute d'elle-même au menu Démarrer. Pour la mettre à jour, remplacez le fichier ; pour la supprimer, quittez Clipper, décochez *Démarrer avec Windows*, puis effacez le dossier et le raccourci *Clipper* du menu Démarrer.
 
 Au premier lancement, Windows peut afficher un avertissement, car l'installeur n'est pas signé : cliquez sur *Informations complémentaires*, puis *Exécuter quand même*.
 
-Juste après l'installation, Defender peut aussi signaler l'installeur comme dangereux et le supprimer. C'est une fausse alerte, due à l'absence de signature : Clipper est installé et fonctionne.
+Juste après l'installation, Defender peut aussi signaler l'installeur comme dangereux et le supprimer. C'est une fausse alerte, due à l'absence de signature : Clipper est installé et fonctionne. La version portable n'a pas ce problème.
 
 Il faut Windows 10 ou 11 et une carte graphique AMD, NVIDIA ou Intel récente.
 

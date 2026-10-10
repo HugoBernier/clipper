@@ -48,6 +48,15 @@ jobs:
         run: |
           $setup = Get-ChildItem target\installer\ClipperSetup-*.exe | Select-Object -First 1
           gh release upload "${{ needs.release-please.outputs.tag_name }}" $setup.FullName --clobber
+      # Version portable : l'exe seul, toujours nommé Clipper.exe, pour qu'une mise à jour
+      # (remplacer le fichier) garde valides les raccourcis du menu Démarrer et du démarrage.
+      - name: Joindre la version portable à la release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          Copy-Item target\release\clipper.exe Clipper.exe
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" Clipper.exe --clobber
       # Defender peut signaler l'installeur non signé une fois l'installation finie :
       # chaque release le dit, pour qu'on ne croie pas à un virus.
       - name: Prévenir de la fausse alerte dans les notes
@@ -60,6 +69,6 @@ jobs:
           $alerte = @"
           ### Installation
 
-          Juste après l'installation, Windows Defender peut signaler l'installeur comme dangereux et le supprimer. C'est une fausse alerte, due à l'absence de signature : Clipper est installé et fonctionne.
+          Juste après l'installation, Windows Defender peut signaler l'installeur comme dangereux et le supprimer. C'est une fausse alerte, due à l'absence de signature : Clipper est installé et fonctionne. La version portable `Clipper.exe` n'a pas ce problème.
           "@
           gh release edit $tag --notes ($notes + "`n`n" + $alerte)
