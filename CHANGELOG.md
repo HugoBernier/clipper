@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/HugoBernier/clipper/compare/v0.7.0...v0.7.1) (2026-10-10)
+
+
+### Documentation
+
+* préciser quand un commit est un fix plutôt qu'un build ([#27](https://github.com/HugoBernier/clipper/issues/27)) ([4266d09](https://github.com/HugoBernier/clipper/commit/4266d091dbde5f5d2bc7e2e37629279df5cbefd2))
+
 ## [0.7.0](https://github.com/HugoBernier/clipper/compare/v0.6.0...v0.7.0) (2026-10-09)
 
 
