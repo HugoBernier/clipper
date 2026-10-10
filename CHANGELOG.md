@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/HugoBernier/clipper/compare/v0.7.1...v0.8.0) (2026-10-10)
+
+
+### Features
+
+* proposer une version portable de Clipper ([#31](https://github.com/HugoBernier/clipper/issues/31)) ([cee7695](https://github.com/HugoBernier/clipper/commit/cee76958c4d84a7fd64e84ac2a30d1de82a50077))
+
 ## [0.7.1](https://github.com/HugoBernier/clipper/compare/v0.7.0...v0.7.1) (2026-10-10)
 
 
