@@ -13,6 +13,8 @@ Téléchargez `ClipperSetup-<version>.exe` depuis [Releases](../../releases), pu
 
 Au premier lancement, Windows peut afficher un avertissement, car l'installeur n'est pas signé : cliquez sur *Informations complémentaires*, puis *Exécuter quand même*.
 
+Juste après l'installation, Defender peut aussi signaler l'installeur comme dangereux et le supprimer. C'est une fausse alerte, due à l'absence de signature : Clipper est installé et fonctionne.
+
 Il faut Windows 10 ou 11 et une carte graphique AMD, NVIDIA ou Intel récente.
 
 ## Utilisation
