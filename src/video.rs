@@ -388,7 +388,9 @@ fn configure_encoder(
             .context("SET_D3D_MANAGER")?;
 
         // Réglages alignés sur OBS (AMF) : CBR, keyframe toutes les 1 s, pas de
-        // B-frames (pts = dts), preset qualité, VBV d'1 s pour borner les dépassements.
+        // B-frames (pts = dts), VBV d'1 s pour borner les dépassements. Preset équilibré
+        // (50) : le preset qualité (100) occupait le circuit d'encodage d'une RX 6800 XT à
+        // 70 % en continu, contre 33 % ; 0 donne la même charge, mais une image moins nette.
         // Le mode de débit se règle avant les types.
         let codec: ICodecAPI = mft.cast().context("ICodecAPI")?;
         let settings = [
@@ -399,7 +401,7 @@ fn configure_encoder(
             ),
             ("GOPSize", CODECAPI_AVEncMPVGOPSize, format.fps),
             ("BFrames", CODECAPI_AVEncMPVDefaultBPictureCount, 0),
-            ("QualityVsSpeed", CODECAPI_AVEncCommonQualityVsSpeed, 100),
+            ("QualityVsSpeed", CODECAPI_AVEncCommonQualityVsSpeed, 50),
             ("BufferSize", CODECAPI_AVEncCommonBufferSize, format.bitrate),
             ("MaxBitRate", CODECAPI_AVEncCommonMaxBitRate, format.bitrate),
         ];
