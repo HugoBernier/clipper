@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/HugoBernier/clipper/compare/v0.8.0...v0.8.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **video:** alléger l'encodeur avec le preset équilibré ([#33](https://github.com/HugoBernier/clipper/issues/33)) ([c70389f](https://github.com/HugoBernier/clipper/commit/c70389f5a2c58bd91a726b6cd95eb944fe5cb766))
+
 ## [0.8.0](https://github.com/HugoBernier/clipper/compare/v0.7.1...v0.8.0) (2026-10-10)
 
 
